@@ -1,4 +1,4 @@
-# resilient-etl
+# sap-mysql-etl
 
 Pipeline ETL em Python que sobrevive a uma origem de dados instável.
 
