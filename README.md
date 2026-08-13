@@ -4,7 +4,7 @@ Pipeline ETL em Python que sobrevive a uma origem de dados instável.
 
 Todo dia ele lê exportações de um ERP, trata e carrega num MySQL que alimenta
 dashboards e um modelo de forecast. O problema interessante não é o volume
-(~255 mil linhas) — é que a origem **muda de formato sem avisar**: encoding,
+(~255 mil linhas). É que a origem **muda de formato sem avisar**: encoding,
 separador, nome de coluna, formato numérico. Cada proteção aqui nasceu de uma
 carga que quebrou em produção.
 
@@ -16,13 +16,13 @@ origem (xlsx/csv)  →  preparar  →  csv tratado  →  upload  →  MySQL
 
 ## O que este projeto mostra
 
-- **Falha alta, nunca silenciosa** — o pior bug de ETL é o que não aparece no
+- **Falha alta, nunca silenciosa.** O pior bug de ETL é o que não aparece no
   log nem no exit code. Três correções aqui são exatamente disso.
-- **Idempotência** — quatro estratégias de carga (`replace`, `truncate`,
+- **Idempotência.** Quatro estratégias de carga (`replace`, `truncate`,
   `date_range`, `upsert`), todas seguras pra rodar duas vezes.
-- **Contrato de schema** — o pipeline declara o que espera da origem e aborta
+- **Contrato de schema.** O pipeline declara o que espera da origem e aborta
   com mensagem útil quando o contrato quebra.
-- **Testável sem infraestrutura** — 92 testes rodam em 1 segundo, sem banco e
+- **Testável sem infraestrutura.** 92 testes rodam em 1 segundo, sem banco e
   sem acesso à rede.
 
 ## Rodando
@@ -49,8 +49,8 @@ config/
   tables.py            estratégia de carga + contrato de schema por tabela
 src/
   io/readers.py        leitura resiliente: encoding, separador, XML, decimal BR
-  io/database.py       conexão, DDL, insert em lote — SQL sempre parametrizado
-  transform/           funções puras, sem I/O — daí os testes rodarem sem nada
+  io/database.py       conexão, DDL, insert em lote (SQL sempre parametrizado)
+  transform/           funções puras, sem I/O (daí os testes rodarem sem nada)
   load/strategies.py   replace / truncate / date_range / upsert
   quality/contracts.py validação de schema e normalização de colunas
 pipelines/             preparar, upload, tabela analítica, carga incremental
@@ -59,12 +59,12 @@ tests/                 92 testes
 
 ## Três bugs que valem a leitura
 
-Os três são de **perda ou corrupção silenciosa** — o pipeline seguia como se
+Os três são de **perda ou corrupção silenciosa**: o pipeline seguia como se
 tivesse dado certo.
 
 ### 1. Duplicidade permanente
 
-`src/load/strategies.py` — a estratégia `date_range` apaga a janela de datas do
+Em `src/load/strategies.py`, a estratégia `date_range` apaga a janela de datas do
 arquivo e reinsere. Linhas com data ilegível eram apenas avisadas e inseridas
 assim mesmo.
 
@@ -77,7 +77,7 @@ Hoje a carga aborta e mostra os valores problemáticos.
 
 ### 2. Backup de arquivo que nunca carregou
 
-`pipelines/upload.py` — o arquivo era movido para o backup mesmo quando a
+Em `pipelines/upload.py`, o arquivo era movido para o backup mesmo quando a
 leitura falhava, porque a função devolvia `0` em vez de levantar exceção. O dado
 do dia sumia da pasta de entrada sem nunca ter entrado no banco.
 
@@ -87,7 +87,7 @@ pra nova tentativa.
 ### 3. Sucesso mentiroso no exit code
 
 O erro era logado por arquivo e o processo saía com `0`. O orquestrador só
-checa o exit code — então registrava **sucesso** enquanto arquivos falhavam.
+checa o exit code, então registrava **sucesso** enquanto arquivos falhavam.
 Foi o que escondeu uma quebra por três dias seguidos.
 
 ## O detector de separador que perdia 33% da base
@@ -102,10 +102,10 @@ entre aspas parecia quebrado.
 ```
 csv.reader (respeita aspas):  2.922 de 2.922 linhas OK
 split(",") cru:                  88 de 2.937 linhas OK
-reconstrutor heurístico:      1.952 linhas — 984 DESCARTADAS (33%)
+reconstrutor heurístico:      1.952 linhas, 984 DESCARTADAS (33%)
 ```
 
-O campo culpado era `"17"" 205 50 ZR17 93W XL D7"` — aspas escapadas dentro de
+O campo culpado era `"17"" 205 50 ZR17 93W XL D7"`: aspas escapadas dentro de
 campo citado. **Um terço da base sumia com um aviso no log.**
 
 A correção usa `csv.reader` na detecção, e reconstruir virou último recurso.
@@ -142,7 +142,7 @@ Medido, não estimado:
 
 O ganho do `.xlsx` veio de trocar o engine (`calamine` no lugar do `openpyxl`).
 Detalhe contraintuitivo: usar `usecols` para ler só 37 das 530 colunas quase não
-ajudou — o custo está em *parsear* o XML, não em materializar colunas.
+ajudou. O custo está em *parsear* o XML, não em materializar colunas.
 
 ## Decisões que eu não tomei
 
@@ -150,7 +150,7 @@ Duas coisas que pareciam melhorias óbvias e não são:
 
 **Tipar as colunas do MySQL** (hoje é `LONGTEXT` pra tudo). Traria índice e
 eliminaria dezenas de `CAST`. Mas um consumidor a jusante faz
-`.replace('.','')` pra tirar separador de milhar — com `DECIMAL`, isso passa a
+`.replace('.','')` pra tirar separador de milhar. Com `DECIMAL`, isso passa a
 comer o ponto decimal e infla o custo em **100x**, sem erro nenhum. O ganho é
 uma janela noturna mais rápida; o risco é corromper o número que decide compra
 de estoque.
@@ -166,5 +166,5 @@ funciona.
 
 Este repositório é uma versão anonimizada de um pipeline em produção. Nomes de
 marca, depósitos e sistemas internos foram trocados por equivalentes genéricos;
-o código e a lógica são os mesmos. Nenhum dado real acompanha o repositório — as
+o código e a lógica são os mesmos. Nenhum dado real acompanha o repositório: as
 pastas em `dados/` vêm vazias, com um README explicando o que vai em cada uma.
