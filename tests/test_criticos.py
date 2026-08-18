@@ -85,8 +85,10 @@ def test_date_range_aceita_datas_todas_validas():
     sql, params = next(
         (sql, p) for sql, p in cursor.executados if sql.strip().startswith("DELETE")
     )
-    # A janela vai como PARAMETRO, nao concatenada na query.
-    assert params[-2:] == ("2026-08-01", "2026-08-03")
+    # A janela vai como PARAMETRO, nao concatenada na query. Hoje sao os meses
+    # do arquivo, um a um — antes era o intervalo min..max, que apagava mes
+    # sem linha no arquivo e nunca repunha.
+    assert params[-1:] == ("2026-08",)
     assert "%s" in sql
     # Nenhum '%' literal solto: neste driver isso quebra o execute com
     # "Not enough parameters" quando a query tambem tem placeholder.

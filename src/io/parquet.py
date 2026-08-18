@@ -22,6 +22,9 @@ import pandas as pd
 
 COLUNA_PARTICAO = "mes"
 
+# Acima disso é o --tudo pedindo o histórico inteiro, não uma janela.
+LIMITE_JANELA = 24
+
 
 def gravar_particionado(df: pd.DataFrame, destino: Path, meses: pd.Series) -> int:
     """Grava o DataFrame particionado por mês. Devolve quantas partições saíram.
@@ -75,6 +78,21 @@ def ler_meses(origem: Path, meses: list[str]) -> pd.DataFrame:
     return pd.concat(partes, ignore_index=True)
 
 
-def ultimos_meses(origem: Path, quantidade: int) -> list[str]:
-    """Os N meses mais recentes que existem na partição."""
-    return meses_disponiveis(origem)[-quantidade:]
+def ultimos_meses(
+    origem: Path, quantidade: int, referencia: pd.Timestamp | None = None
+) -> list[str]:
+    """Os N meses do calendário (corrente pra trás) que existem na partição.
+
+    Amarro no calendário e não nos meses que existem: senão uma partição com
+    data futura trava a janela, e um mês sem emissão faz a janela alcançar um
+    mês antigo que o DELETE apaga sem repor.
+    """
+    existentes = meses_disponiveis(origem)
+    if quantidade > LIMITE_JANELA:
+        return existentes
+
+    hoje = referencia if referencia is not None else pd.Timestamp.today()
+    esperados = {
+        (hoje - pd.DateOffset(months=i)).strftime("%Y-%m") for i in range(quantidade)
+    }
+    return [m for m in existentes if m in esperados]
