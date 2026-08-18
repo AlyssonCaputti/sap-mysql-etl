@@ -19,6 +19,7 @@ from src.io.execucoes import registrar
 from src.io.readers import ler_arquivo
 from src.load.strategies import executar
 from src.load.views import criar_view_itens_completo
+from src.quality.checkpoints import porta1_recepcao, porta2_transformacao
 from src.quality.contracts import (
     exigir_nao_vazio,
     normalizar_colunas,
@@ -122,6 +123,9 @@ def carregar_arquivo(caminho: Path, chave_pasta: str, cursor) -> int:
         # Aviso de leitura = linha jogada fora. Sobe como warning pra não sumir.
         log.warning("  REJEITADAS: %s", aviso)
 
+    porta1_recepcao(df, caminho.name, avisos)
+    linhas_lidas = len(df)
+
     exigir_nao_vazio(df, caminho.name)
     df = normalizar_colunas(df)
 
@@ -130,7 +134,12 @@ def carregar_arquivo(caminho: Path, chave_pasta: str, cursor) -> int:
         for aviso in validar_contrato(df, contrato, caminho.name):
             log.warning("  %s", aviso)
 
-    log.info("  %s linhas x %s colunas", f"{len(df):,}", len(df.columns))
+    porta2_transformacao(
+        df,
+        caminho.name,
+        linhas_entrada=linhas_lidas,
+        chave=(cfg.get("chaves") or [None])[0],
+    )
 
     df = df.fillna("").astype(str)  # o destino é LONGTEXT
 

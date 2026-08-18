@@ -25,6 +25,11 @@ from config.tables import CONTRATOS
 from src.io.database import conexao
 from src.io.readers import ler_arquivo
 from src.load.strategies import replace
+from src.quality.checkpoints import (
+    comparar_com_ultima,
+    porta1_recepcao,
+    porta2_transformacao,
+)
 from src.quality.contracts import (
     exigir_nao_vazio,
     normalizar_colunas,
@@ -73,11 +78,15 @@ def salvar_estado(estado: dict) -> None:
     )
 
 
-def carregar(caminho: Path) -> int:
+def carregar(caminho: Path, linhas_anteriores: int | None = None) -> int:
     """Le, valida contra o contrato e substitui a tabela."""
     df, avisos = ler_arquivo(caminho)
     for aviso in avisos:
         log.warning("%s", aviso)
+
+    porta1_recepcao(df, caminho.name, avisos)
+    comparar_com_ultima(len(df), linhas_anteriores, caminho.name)
+    linhas_lidas = len(df)
 
     df = normalizar_colunas(df)
 
@@ -85,6 +94,8 @@ def carregar(caminho: Path) -> int:
     # ficar com o dado de ontem.
     validar_contrato(df, CONTRATOS[CHAVE_PASTA], caminho.name)
     exigir_nao_vazio(df, caminho.name)
+
+    porta2_transformacao(df, caminho.name, linhas_entrada=linhas_lidas)
 
     df = df.fillna("").astype(str)
 
@@ -151,7 +162,7 @@ def main(argumentos: list[str] | None = None) -> int:
 
     inicio = time.time()
     try:
-        linhas = carregar(caminho)
+        linhas = carregar(caminho, estado.get("linhas"))
     except Exception as erro:
         # Não gravo o hash, então a próxima rodada tenta de novo sozinha.
         log.error("ERRO ao carregar: %s: %s", type(erro).__name__, erro)
