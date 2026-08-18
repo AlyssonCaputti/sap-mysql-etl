@@ -7,15 +7,15 @@ import datetime
 import logging
 import re
 import shutil
-import sys
 import time
 import unicodedata
 from pathlib import Path
 
-from config.settings import BACKUP, ENTRADA_VPS, PASTA_LOGS
+from config.settings import BACKUP, ENTRADA_VPS, EXTENSOES_DADOS
 from config.tables import CONTRATOS, ESTRATEGIA_PADRAO, ESTRATEGIAS
 from src.io.database import conexao, validar_identificador
 from src.io.execucoes import registrar
+from src.io.log import configurar as configurar_log
 from src.io.readers import ler_arquivo
 from src.load.strategies import executar
 from src.load.views import criar_view_itens_completo
@@ -28,7 +28,7 @@ from src.quality.contracts import (
 
 log = logging.getLogger(__name__)
 
-EXTENSOES = (".csv", ".xlsx", ".xlsm")
+EXTENSOES = EXTENSOES_DADOS
 
 # Pastas que outro pipeline carrega. O faturamento roda de hora em hora
 # (pipelines/faturamento_horario.py) e não pode ser carregado aqui também —
@@ -255,21 +255,8 @@ def varrer(pular: set[str] | None = None) -> int:
     return falhas
 
 
-def configurar_log() -> None:
-    PASTA_LOGS.mkdir(parents=True, exist_ok=True)
-    logging.basicConfig(
-        level=logging.INFO,
-        format="[%(asctime)s] %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-        handlers=[
-            logging.FileHandler(PASTA_LOGS / "upload.log", encoding="utf-8"),
-            logging.StreamHandler(sys.stdout),
-        ],
-    )
-
-
 def main() -> int:
-    configurar_log()
+    configurar_log("upload.log")
 
     # Banco fora do ar, rede ou credencial errada morre aqui, antes de qualquer
     # arquivo. Sem isso vira um traceback de 20 linhas do driver, quando o que

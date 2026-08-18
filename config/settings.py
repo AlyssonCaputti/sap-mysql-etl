@@ -99,3 +99,6 @@ TAMANHO_LOTE = int(os.getenv("ETL_TAMANHO_LOTE", "5000"))
 COLUNAS_POR_LOTE_ITENS = 150
 
 CSV_SAIDA = {"sep": ";", "encoding": "utf-8", "index": False}
+
+# O que o upload e o sku_custo consideram arquivo de dado.
+EXTENSOES_DADOS = (".csv", ".xlsx", ".xlsm")

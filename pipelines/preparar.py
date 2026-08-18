@@ -15,10 +15,10 @@ from config.settings import (
     CSV_SAIDA,
     ENTRADA_VPS,
     ORIGENS,
-    PASTA_LOGS,
     REFERENCIA_TECNICA_CLIENTES,
     SAIDAS,
 )
+from src.io.log import configurar as configurar_log
 from src.io.readers import ler_arquivo, ler_excel
 from src.transform import clientes as t_clientes
 from src.transform import faturamento as t_faturamento
@@ -101,21 +101,8 @@ ETAPAS = {
 }
 
 
-def configurar_log() -> None:
-    PASTA_LOGS.mkdir(parents=True, exist_ok=True)
-    logging.basicConfig(
-        level=logging.INFO,
-        format="[%(asctime)s] %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-        handlers=[
-            logging.FileHandler(PASTA_LOGS / "preparar.log", encoding="utf-8"),
-            logging.StreamHandler(sys.stdout),
-        ],
-    )
-
-
 def main(argumentos: list[str] | None = None) -> int:
-    configurar_log()
+    configurar_log("preparar.log")
     argumentos = argumentos if argumentos is not None else sys.argv[1:]
 
     escolhidas = argumentos or list(ETAPAS)

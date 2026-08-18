@@ -10,11 +10,10 @@ A tabela precisa existir antes — quem cria é a migration 002 do dashboard-api
 """
 
 import logging
-import sys
 import time
 
-from config.settings import PASTA_LOGS
 from src.io.database import conexao
+from src.io.log import configurar as configurar_log
 
 log = logging.getLogger(__name__)
 
@@ -287,23 +286,8 @@ def garantir_colunas(cursor) -> None:
             log.info("coluna '%s' adicionada a faturamento_full", nome)
 
 
-def configurar_log() -> None:
-    PASTA_LOGS.mkdir(parents=True, exist_ok=True)
-    logging.basicConfig(
-        level=logging.INFO,
-        format="[%(asctime)s] %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-        handlers=[
-            logging.FileHandler(
-                PASTA_LOGS / "faturamento_full.log", encoding="utf-8"
-            ),
-            logging.StreamHandler(sys.stdout),
-        ],
-    )
-
-
 def main() -> int:
-    configurar_log()
+    configurar_log("faturamento_full.log")
     log.info("=" * 60)
     log.info("Materializando faturamento_full...")
     inicio = time.time()

@@ -63,6 +63,41 @@ def test_estado_ausente_ou_corrompido_devolve_vazio(tmp_path):
     assert ler_estado(ruim) == {}
 
 
+def test_estado_nao_deixa_temporario_para_tras(tmp_path):
+    """Gravo num .tmp e troco. O .tmp não pode sobrar na pasta."""
+    arquivo = tmp_path / "estado.json"
+    salvar_estado(arquivo, {"hash": "abc"})
+
+    assert list(p.name for p in tmp_path.iterdir()) == ["estado.json"]
+
+
+def test_estado_anterior_sobrevive_a_falha_na_escrita(tmp_path, monkeypatch):
+    """Se a escrita morre no meio, quero o estado de antes, não meia linha.
+
+    Sem a troca atômica o arquivo ficava truncado, ler_estado devolvia {} e a
+    rodada seguinte recarregava tudo à toa.
+    """
+    arquivo = tmp_path / "estado.json"
+    salvar_estado(arquivo, {"hash": "bom", "linhas": 256352})
+
+    def morrer(*_, **__):
+        raise OSError("disco cheio")
+
+    monkeypatch.setattr("src.io.controle.os.replace", morrer)
+    with pytest.raises(OSError):
+        salvar_estado(arquivo, {"hash": "novo", "linhas": 1})
+
+    assert ler_estado(arquivo) == {"hash": "bom", "linhas": 256352}
+
+
+def test_estado_sobrescreve_o_anterior(tmp_path):
+    arquivo = tmp_path / "estado.json"
+    salvar_estado(arquivo, {"hash": "primeiro"})
+    salvar_estado(arquivo, {"hash": "segundo"})
+
+    assert ler_estado(arquivo)["hash"] == "segundo"
+
+
 # ─────────────────────────────────────────────────────────────
 # Lock
 # ─────────────────────────────────────────────────────────────

@@ -12,17 +12,16 @@ quase sempre está igual.
 """
 
 import argparse
-import hashlib
-import json
 import logging
-import sys
 import time
 from datetime import datetime
 from pathlib import Path
 
-from config.settings import PASTA_LOGS, PASTA_SKU_CUSTO, RAIZ
+from config.settings import EXTENSOES_DADOS, PASTA_SKU_CUSTO, RAIZ
 from config.tables import CONTRATOS
+from src.io.controle import hash_de, ler_estado, salvar_estado
 from src.io.database import conexao
+from src.io.log import configurar as configurar_log
 from src.io.readers import ler_arquivo
 from src.load.strategies import replace
 from src.quality.checkpoints import (
@@ -43,7 +42,7 @@ CHAVE_PASTA = "sku_custo_cd_giba"
 PASTA = PASTA_SKU_CUSTO
 TABELA = "SkuCustoCdGiba"
 ARQUIVO_ESTADO = RAIZ / ".estado_sku_custo.json"
-EXTENSOES = (".csv", ".xlsx", ".xlsm")
+EXTENSOES = EXTENSOES_DADOS
 
 
 def achar_arquivo() -> Path | None:
@@ -55,27 +54,6 @@ def achar_arquivo() -> Path | None:
         return None
     # Normalmente só tem um. Se tiver mais, fico com o mais recente.
     return max(alvos, key=lambda a: a.stat().st_mtime)
-
-
-def hash_de(caminho: Path) -> str:
-    digest = hashlib.sha256()
-    with open(caminho, "rb") as fh:
-        for bloco in iter(lambda: fh.read(1024 * 1024), b""):
-            digest.update(bloco)
-    return digest.hexdigest()
-
-
-def ler_estado() -> dict:
-    try:
-        return json.loads(ARQUIVO_ESTADO.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {}
-
-
-def salvar_estado(estado: dict) -> None:
-    ARQUIVO_ESTADO.write_text(
-        json.dumps(estado, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
 
 
 def carregar(caminho: Path, linhas_anteriores: int | None = None) -> int:
@@ -110,19 +88,6 @@ def carregar(caminho: Path, linhas_anteriores: int | None = None) -> int:
     return gravadas
 
 
-def configurar_log() -> None:
-    PASTA_LOGS.mkdir(parents=True, exist_ok=True)
-    logging.basicConfig(
-        level=logging.INFO,
-        format="[%(asctime)s] %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-        handlers=[
-            logging.FileHandler(PASTA_LOGS / "sku_custo.log", encoding="utf-8"),
-            logging.StreamHandler(sys.stdout),
-        ],
-    )
-
-
 def main(argumentos: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="ETL incremental SkuCustoCdGiba")
     parser.add_argument(
@@ -133,14 +98,14 @@ def main(argumentos: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argumentos)
 
-    configurar_log()
+    configurar_log("sku_custo.log")
 
     caminho = achar_arquivo()
     if not caminho:
         log.info("nenhum arquivo na pasta — nada a fazer")
         return 0
 
-    estado = ler_estado()
+    estado = ler_estado(ARQUIVO_ESTADO)
     atual = hash_de(caminho)
     modificado = datetime.fromtimestamp(caminho.stat().st_mtime)
 
@@ -170,6 +135,7 @@ def main(argumentos: list[str] | None = None) -> int:
         return 1
 
     salvar_estado(
+        ARQUIVO_ESTADO,
         {
             "hash": atual,
             "arquivo": caminho.name,

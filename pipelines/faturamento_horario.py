@@ -29,12 +29,11 @@ Proteções: comparo o hash antes de trabalhar, espero o arquivo parar de cresce
 
 import argparse
 import logging
-import sys
 import time
 
 import pandas as pd
 
-from config.settings import CSV_SAIDA, DADOS, ORIGENS, PASTA_LOGS, RAIZ, SAIDAS
+from config.settings import CSV_SAIDA, DADOS, ORIGENS, RAIZ, SAIDAS
 from config.tables import ESTRATEGIAS
 from src.io.controle import (
     AindaEscrevendo,
@@ -46,6 +45,7 @@ from src.io.controle import (
     salvar_estado,
 )
 from src.io.database import conexao
+from src.io.log import configurar as configurar_log
 from src.io.parquet import gravar_particionado, ler_meses, ultimos_meses
 from src.io.readers import ler_arquivo
 from src.load.strategies import _parsear_datas
@@ -196,21 +196,6 @@ def materializar() -> None:
         raise RuntimeError("faturamento_full falhou — ver o log dele")
 
 
-def configurar_log() -> None:
-    PASTA_LOGS.mkdir(parents=True, exist_ok=True)
-    logging.basicConfig(
-        level=logging.INFO,
-        format="[%(asctime)s] %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-        handlers=[
-            logging.FileHandler(
-                PASTA_LOGS / "faturamento_horario.log", encoding="utf-8"
-            ),
-            logging.StreamHandler(sys.stdout),
-        ],
-    )
-
-
 def main(argumentos: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Atualiza Faturamento + faturamento_full de hora em hora"
@@ -226,7 +211,7 @@ def main(argumentos: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argumentos)
 
-    configurar_log()
+    configurar_log("faturamento_horario.log")
 
     if not ORIGEM.exists():
         log.error("não achei a origem: %s", ORIGEM)

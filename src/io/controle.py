@@ -62,9 +62,17 @@ def ler_estado(caminho: Path) -> dict:
 
 
 def salvar_estado(caminho: Path, estado: dict) -> None:
-    caminho.write_text(
+    """Grava num temporário e troca no fim.
+
+    O write direto trunca antes de escrever: se a máquina cai no meio, sobra
+    um JSON pela metade, o ler_estado devolve {} e a rodada seguinte acha que
+    a origem mudou — recarrega tudo e refaz o faturamento_full à toa.
+    """
+    temporario = caminho.with_suffix(caminho.suffix + ".tmp")
+    temporario.write_text(
         json.dumps(estado, ensure_ascii=False, indent=2), encoding="utf-8"
     )
+    os.replace(temporario, caminho)
 
 
 class JaEstaRodando(Exception):

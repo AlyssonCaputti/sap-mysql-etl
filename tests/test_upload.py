@@ -148,7 +148,7 @@ def test_main_devolve_erro_quando_arquivo_falha(ambiente, monkeypatch):
     _criar_csv(entrada / "itens", "quebrado.xlsx", "nao e xlsx")
 
     monkeypatch.setattr(upload, "ESTRATEGIAS", {"itens": {"estrategia": "replace"}})
-    monkeypatch.setattr(upload, "configurar_log", lambda: None)
+    monkeypatch.setattr(upload, "configurar_log", lambda _: None)
 
     assert upload.main() == 1
 
@@ -168,7 +168,7 @@ def test_falha_de_infraestrutura_nao_vira_traceback(tmp_path, monkeypatch, caplo
 
     monkeypatch.setattr(upload, "ENTRADA_VPS", entrada)
     monkeypatch.setattr(upload, "conexao", conexao_que_falha)
-    monkeypatch.setattr(upload, "configurar_log", lambda: None)
+    monkeypatch.setattr(upload, "configurar_log", lambda _: None)
 
     assert upload.main() == 1
     assert "INFRAESTRUTURA" in caplog.text
@@ -180,7 +180,7 @@ def test_main_devolve_zero_quando_tudo_carrega(ambiente, monkeypatch):
     _criar_csv(entrada / "itens", "ok.csv", "sku;valor\nA1;10\n")
 
     monkeypatch.setattr(upload, "ESTRATEGIAS", {"itens": {"estrategia": "replace"}})
-    monkeypatch.setattr(upload, "configurar_log", lambda: None)
+    monkeypatch.setattr(upload, "configurar_log", lambda _: None)
 
     assert upload.main() == 0
 
