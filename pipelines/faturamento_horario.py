@@ -35,6 +35,7 @@ import time
 import pandas as pd
 
 from config.settings import CSV_SAIDA, DADOS, ORIGENS, PASTA_LOGS, RAIZ, SAIDAS
+from config.tables import ESTRATEGIAS
 from src.io.controle import (
     AindaEscrevendo,
     JaEstaRodando,
@@ -48,6 +49,12 @@ from src.io.database import conexao
 from src.io.parquet import gravar_particionado, ler_meses, ultimos_meses
 from src.io.readers import ler_arquivo
 from src.load.strategies import _parsear_datas
+from src.quality.checkpoints import (
+    comparar_com_ultima,
+    porta1_recepcao,
+    porta2_transformacao,
+    saida_carga,
+)
 from src.quality.contracts import normalizar_colunas
 from src.transform import faturamento as t_faturamento
 
@@ -61,44 +68,76 @@ ARQUIVO_LOCK = RAIZ / ".lock_faturamento"
 # Mês corrente + anterior. O anterior é seguro contra nota retroativa.
 MESES_JANELA = 2
 
+# Um lugar só pro formato da emissão: é o mesmo que a carga usa no DELETE.
+FORMATO_EMISSAO = ESTRATEGIAS["faturamento"]["formato_data"]
+COLUNA_DATA = ESTRATEGIAS["faturamento"]["coluna_data"]
+
 # Uma carga completa leva ~1min. Lock mais velho que isso é de processo morto.
 LOCK_EXPIRA_EM = 30 * 60
 
 
-def preparar() -> tuple[int, int]:
+def preparar(linhas_anteriores: int | None = None) -> tuple[int, int, pd.Series]:
     """Lê a origem, trata e grava no Parquet particionado.
 
-    Devolve (linhas tratadas, partições escritas).
+    Devolve (linhas tratadas, partições escritas, meses de cada linha).
     """
     df, avisos = ler_arquivo(ORIGEM)
     for aviso in avisos:
         log.warning("  %s", aviso)
 
+    porta1_recepcao(df, ORIGEM.name, avisos)
+    comparar_com_ultima(len(df), linhas_anteriores, ORIGEM.name)
+
     tratado, mais_avisos = t_faturamento.transformar(df)
     for aviso in mais_avisos:
         log.warning("  %s", aviso)
 
-    # Preciso do mês de cada linha pra particionar. Uso o mesmo parser da
-    # estratégia de carga, pra não haver divergência de interpretação de data.
+    # Preciso do mês de cada linha pra particionar. Uso o mesmo parser e o
+    # mesmo formato da estratégia de carga, pra não haver duas interpretações
+    # de data no caminho.
     normalizado = normalizar_colunas(tratado)
-    datas = _parsear_datas(normalizado, "emissao", "%d/%m/%Y")
+    datas = _parsear_datas(normalizado, COLUNA_DATA, FORMATO_EMISSAO)
+
+    # Sem chave aqui: nota_item repete de propósito quando a nota tem
+    # devolução parcial (mesmo item, valores diferentes). Conferi na origem —
+    # 135 linhas, nenhuma cópia exata. Avisar disso toda hora seria só ruído.
+    porta2_transformacao(
+        tratado,
+        ORIGEM.name,
+        linhas_entrada=len(df),
+        coluna_data=COLUNA_DATA,
+        datas=datas,
+    )
 
     if datas.isna().any():
         raise ValueError(
             f"{int(datas.isna().sum())} linha(s) com emissão ilegível. "
-            f"Exemplos: {normalizado.loc[datas.isna(), 'emissao'].head(5).tolist()}"
+            f"Exemplos: {normalizado.loc[datas.isna(), COLUNA_DATA].head(5).tolist()}"
         )
 
-    particoes = gravar_particionado(tratado, PARQUET, datas.dt.strftime("%Y-%m"))
+    # Data futura vira partição que não deveria existir, e essa partição fica
+    # pra sempre (só reescrevo as que estão no arquivo, nunca apago as outras).
+    # Aí a janela do calendário nunca mais a alcança e ela vira lixo silencioso.
+    futuras = datas > pd.Timestamp.today().normalize()
+    if futuras.any():
+        exemplos = normalizado.loc[futuras, COLUNA_DATA].astype(str).unique()[:5]
+        raise ValueError(
+            f"{int(futuras.sum())} linha(s) com emissão no futuro. Abortei — "
+            f"cada uma cria uma partição órfã que fica no disco pra sempre. "
+            f"Exemplos: {exemplos.tolist()}"
+        )
+
+    meses = datas.dt.strftime("%Y-%m")
+    particoes = gravar_particionado(tratado, PARQUET, meses)
     log.info(
         "  tratado: %s linhas em %s partição(ões) de mês",
         f"{len(tratado):,}",
         particoes,
     )
-    return len(tratado), particoes
+    return len(tratado), particoes, meses
 
 
-def carregar(tudo: bool = False) -> int:
+def carregar(tudo: bool = False, meses_origem: pd.Series | None = None) -> int:
     """Carrega a janela de meses no MySQL. Devolve as linhas enviadas."""
     from pipelines.upload import carregar_arquivo
 
@@ -124,8 +163,23 @@ def carregar(tudo: bool = False) -> int:
         except Exception:
             con.rollback()
             raise
-        finally:
-            cursor.close()
+
+        # Depois do commit: comparo mês a mês a origem com o banco. É o que
+        # mostra a nota retroativa que caiu fora da janela — sem isso a
+        # diferença só aparece se alguém for conferir na mão.
+        if meses_origem is not None:
+            try:
+                saida_carga(
+                    cursor,
+                    "Faturamento",
+                    COLUNA_DATA,
+                    meses,
+                    meses_origem.value_counts().to_dict(),
+                )
+            except Exception as erro:
+                log.warning("  [saída] conferência por mês falhou: %s", erro)
+
+        cursor.close()
     return linhas
 
 
@@ -215,8 +269,8 @@ def main(argumentos: list[str] | None = None) -> int:
             log.info("=" * 60)
             log.info("origem mudou (mod=%s) — atualizando", modificado)
 
-            total, _ = preparar()
-            linhas = carregar(tudo=args.tudo)
+            total, _, meses = preparar(estado.get("linhas_origem"))
+            linhas = carregar(tudo=args.tudo, meses_origem=meses)
             materializar()
 
     except JaEstaRodando as erro:

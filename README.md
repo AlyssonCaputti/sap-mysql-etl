@@ -21,6 +21,7 @@ src/
   load/strategies.py replace / truncate / date_range / upsert
   load/views.py     VIEW ItensCompleto
   quality/contracts.py validação de schema e normalização de colunas
+  quality/checkpoints.py portas 1 e 2 + conferência de saída
 pipelines/
   preparar.py       origens → CSVs tratados
   upload.py         CSVs → MySQL
@@ -28,7 +29,7 @@ pipelines/
   sku_custo.py      carga incremental por hash (a cada 5 min)
 dados/              origens brutas do SAP (uma pasta por entidade)
   para_vps/         saída tratada — o nome da pasta vira o nome da tabela
-tests/              127 testes, rodam sem banco e sem acesso à rede
+tests/              159 testes, rodam sem banco e sem acesso à rede
 .claude/            skills e relatórios (fora do git)
 ```
 
@@ -102,6 +103,21 @@ todo o histórico, então quem comprou há meses apareceria como `outros`.
 
 Para recarregar o histórico completo (depois de corrigir dado antigo, por
 exemplo): `python -m pipelines.faturamento_horario --tudo`.
+
+### Qualidade de dado — três pontos de checagem
+
+Cada carga loga uma linha em três momentos, para dar pra responder "o dado está
+bom?" sem abrir o banco (`src/quality/checkpoints.py`):
+
+| Ponto | O que reporta |
+|---|---|
+| **porta 1** — recepção | linhas × colunas lidas, linhas vazias, avisos, queda brusca de volume |
+| **porta 2** — transformação | linhas perdidas no tratamento, chave duplicada/vazia, janela de datas, datas ilegíveis e futuras |
+| **saída** — carga | contagem por mês da origem × banco, separando o que caiu dentro e fora da janela |
+
+O checkpoint de saída é o que enxerga a nota retroativa: quando uma linha existe
+na origem mas está fora da janela de 2 meses, ele avisa e sugere o `--tudo`.
+Medido em 18/08/2026: 48 linhas nessa situação (2024-12, 2025-01 e 2026-06).
 
 ---
 
