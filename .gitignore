@@ -1,0 +1,41 @@
+# Credenciais - nunca versionar
+.env
+
+# Logs gerados pelo ETL — mantenho a pasta, jogo fora o conteúdo
+logs/*
+!logs/.gitkeep
+
+# Estado e locks dos ETLs que rodam de tempos em tempos
+.estado_*.json
+.lock_*
+
+# Cache Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# Ambientes virtuais
+.venv/
+venv/
+env/
+
+# Dados: quero a estrutura de pastas no repo, mas nenhum arquivo de dado.
+# Os .gitkeep são o que mantém as pastas vazias versionadas.
+dados/**
+!dados/**/
+!dados/**/.gitkeep
+!dados/README.md
+
+# Cache do faturamento (gerado, nao versionado)
+dados/faturamento_parquet/
+
+*.csv
+*.xlsx
+*.xlsm
+
+# Configuracao local do Claude Code
+.claude/
+
+# NAO ignorar (o original tinha "*.txt", que engolia estes dois):
+!requirements.txt
