@@ -7,13 +7,13 @@ vazia e precisa colocar as exportações do SAP nos lugares certos.
 
 | Pasta | Arquivo esperado | Usado por |
 |---|---|---|
-| `clientes/` | `clientes_origem.xlsx` | preparar clientes |
+| `clientes/` | `clientes.xlsx` | preparar clientes |
 | `ilhas_vendedores/` | `vendedores.xlsx` | preparar clientes (join) |
-| `faturamento/` | `faturamento_origem.csv` | preparar faturamento |
-| `itens/` | `itens_origem.csv` | preparar itens |
-| `preco_revenda/` | `precos.csv` | tabela de referência |
+| `faturamento/` | `faturamento.csv` (vem da rede) | preparar faturamento |
+| `itens/` | `itens.csv` | preparar itens |
+| `preco_revenda/` | `preco_revenda.csv` | tabela de referência |
 | `imagem_url/` | qualquer `.csv` | tabela de referência |
-| `referencia/` | `clientes_origem.xlsx` (layout técnico do SAP) | só quando a origem vem com cabeçalho em português |
+| `referencia/` | `clientes.xlsx` (layout técnico do SAP) | só quando a origem vem com cabeçalho em português |
 | `para_vps/` | gerado pelo `preparar` | o `upload` lê daqui |
 | `_backup/` | gerado pelo `upload` | arquivo já carregado vai pra cá |
 

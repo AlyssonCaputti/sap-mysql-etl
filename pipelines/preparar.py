@@ -15,10 +15,10 @@ from config.settings import (
     CSV_SAIDA,
     ENTRADA_VPS,
     ORIGENS,
-    PASTA_LOGS,
     REFERENCIA_TECNICA_CLIENTES,
     SAIDAS,
 )
+from src.io.log import configurar as configurar_log
 from src.io.readers import ler_arquivo, ler_excel
 from src.transform import clientes as t_clientes
 from src.transform import faturamento as t_faturamento
@@ -47,8 +47,8 @@ def preparar_clientes() -> None:
     log.info("clientes...")
     df = ler_excel(ORIGENS["clientes"])
 
-    # A origem já veio com cabeçalho em português no lugar do técnico. Quando
-    # isso acontece eu conserto pela posição, usando a planilha de referência.
+    # Em 01/07/2026 a origem veio com cabeçalho em português. Quando isso
+    # acontece eu conserto pela posição, usando a planilha de referência.
     if "CardCode" not in df.columns:
         log.warning("  sem cabeçalho técnico (CardCode) — realinhando por posição.")
         referencia = pd.read_excel(REFERENCIA_TECNICA_CLIENTES, nrows=0)
@@ -83,7 +83,7 @@ def preparar_itens() -> None:
     # pasta. A view ItensCompleto junta tudo de volta depois.
     for indice, lote in enumerate(extras, 1):
         destino = (
-            ENTRADA_VPS / f"Itens Extra {indice}" / f"itens_origem_extra{indice}.csv"
+            ENTRADA_VPS / f"Itens Extra {indice}" / f"itens_extra{indice}.csv"
         )
         _escrever(lote, destino)
 
@@ -101,21 +101,8 @@ ETAPAS = {
 }
 
 
-def configurar_log() -> None:
-    PASTA_LOGS.mkdir(parents=True, exist_ok=True)
-    logging.basicConfig(
-        level=logging.INFO,
-        format="[%(asctime)s] %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-        handlers=[
-            logging.FileHandler(PASTA_LOGS / "preparar.log", encoding="utf-8"),
-            logging.StreamHandler(sys.stdout),
-        ],
-    )
-
-
 def main(argumentos: list[str] | None = None) -> int:
-    configurar_log()
+    configurar_log("preparar.log")
     argumentos = argumentos if argumentos is not None else sys.argv[1:]
 
     escolhidas = argumentos or list(ETAPAS)

@@ -49,8 +49,8 @@ def criar_tabela(cursor, tabela: str, colunas: list[str]) -> None:
     """Cria tudo como LONGTEXT.
 
     É dívida técnica conhecida — mata índice e obriga CAST em quem consulta.
-    Mas mudar afeta o a API de dashboards, então fica como decisão à parte.
-    Ver .claude/relatorios/DECISAO-TIPAGEM.md.
+    Mas mudar afeta quem consome, então fica como decisão à parte.
+    Ver a secao 6 de .claude/relatorios/RELATORIO.md.
     """
     validar_identificador(tabela)
     for coluna in colunas:

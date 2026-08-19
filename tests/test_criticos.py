@@ -85,8 +85,10 @@ def test_date_range_aceita_datas_todas_validas():
     sql, params = next(
         (sql, p) for sql, p in cursor.executados if sql.strip().startswith("DELETE")
     )
-    # A janela vai como PARAMETRO, nao concatenada na query.
-    assert params[-2:] == ("2026-08-01", "2026-08-03")
+    # A janela vai como PARAMETRO, nao concatenada na query. Hoje sao os meses
+    # do arquivo, um a um — antes era o intervalo min..max, que apagava mes
+    # sem linha no arquivo e nunca repunha.
+    assert params[-1:] == ("2026-08",)
     assert "%s" in sql
     # Nenhum '%' literal solto: neste driver isso quebra o execute com
     # "Not enough parameters" quando a query tambem tem placeholder.
@@ -200,7 +202,7 @@ def test_identificador_invalido_e_recusado(nome):
 
 
 # ─────────────────────────────────────────────────────────────
-# CICATRIZ: separador errado ja parou a carga por dias seguidos
+# CICATRIZ: separador errado parou a base por 3 dias (01-03/08/2026)
 # ─────────────────────────────────────────────────────────────
 def test_detecta_virgula(tmp_path):
     arquivo = tmp_path / "v.csv"
@@ -220,7 +222,7 @@ def test_csv_virgula_nao_vira_coluna_unica(tmp_path):
     arquivo = tmp_path / "estoque.csv"
     arquivo.write_text(
         "sku,descricao,ncm,codigo_deposito,nome_deposito,custo_medio,em_estoque,pedido\n"
-        "A1,PNEU,4011,CD01,GIBA,100.50,5,0\n",
+        "A1,PRODUTO,4011,CD01,DEPOSITO,100.50,5,0\n",
         encoding="utf-8",
     )
     df, _ = ler_csv(arquivo)
@@ -253,8 +255,8 @@ def test_remove_coluna_indice_hash(tmp_path):
 # ─────────────────────────────────────────────────────────────
 def test_reconstroi_decimal_br_partido():
     # "399,89" foi partido em "399" e "89" pelo split.
-    tokens = _reconstruir_linha("FILIAL_A,196520,399,89,MARCA_FOCO", 4)
-    assert tokens == ["FILIAL_A", "196520", "399,89", "MARCA_FOCO"]
+    tokens = _reconstruir_linha("FILIAL,196520,399,89,MARCA", 4)
+    assert tokens == ["FILIAL", "196520", "399,89", "MARCA"]
 
 
 def test_reconstroi_negativo_com_milhar():
@@ -273,7 +275,7 @@ def test_mantem_texto_livre_com_virgula_e_espaco():
 # perdia 33% das linhas em silencio
 # ─────────────────────────────────────────────────────────────
 def test_csv_com_aspas_nao_cai_no_reconstrutor(tmp_path):
-    """O caso real de itens_origem.csv.
+    """O caso real do CSV de itens.
 
     Campos citados contendo virgula E aspas escapadas — `"17"" 205 50 ZR17"` —
     faziam o split(",") cru da deteccao ver contagem errada, o arquivo caia no

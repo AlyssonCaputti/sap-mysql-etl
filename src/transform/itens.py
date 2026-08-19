@@ -11,7 +11,7 @@ import pandas as pd
 from config.settings import COLUNAS_POR_LOTE_ITENS
 
 # Onde cada nome técnico do SAP fica. Uso quando a origem manda o cabeçalho em
-# português — a ordem das colunas é a mesma nos dois casos.
+# português (23/07/2026) — a ordem das colunas é a mesma nos dois casos.
 POSICOES_TECNICAS = {
     0: "ItemCode",
     1: "ItemName",
@@ -54,22 +54,22 @@ MAPA_COLUNAS = {
     "U_UnidadedeNegocio": "unidade_de_negocio",
     "LastPurPrc": "preco_ultima_compra",
     "LastPurCur": "moeda",
-    "CD_BA": "cd_ba",
-    "CD_DF": "cd_df",
-    "CD_ES": "cd_es",
-    "CD_GO": "cd_go",
-    "CD_MG": "cd_mg",
-    "CD_MS": "cd_ms",
-    "CD_MT": "cd_mt",
-    "CD_PR": "cd_pr",
-    "CD_RJ": "cd_rj",
-    "CD_RS": "cd_rs",
-    "CD_SC": "cd_sc",
-    "CD_SJRP": "cd_sjrp",
-    "CD_SP": "cd_sp",
-    "CD_UB": "cd_ub",
-    "CD_NAC": "cd_nac",
-    "CD_IMP": "cd_imp",
+    "AWSBA001": "awsba001",
+    "AWSDF001": "awsdf001",
+    "AWSES001": "awses001",
+    "AWSGO001": "awsgo001",
+    "AWSMG001": "awsmg001",
+    "AWSMS001": "awsms001",
+    "AWSMT001": "awsmt001",
+    "AWSPR001": "awspr001",
+    "AWSRJ010": "awsrj010",
+    "AWSRS001": "awsrs001",
+    "AWSSC001": "awssc001",
+    "AWSSJRP1": "awssjrp1",
+    "AWSSP001": "awssp001",
+    "AWSUB001": "awssub001",
+    "AWSNAC01": "awsnac01",
+    "IMP-001": "imp_001",
 }
 
 CHAVE = "ItemCode"

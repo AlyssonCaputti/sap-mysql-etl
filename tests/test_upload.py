@@ -96,9 +96,9 @@ def _criar_csv(pasta, nome, conteudo):
 # CORRECAO 2 — backup so depois de carga bem-sucedida
 # ─────────────────────────────────────────────────────────────
 def test_arquivo_ilegivel_permanece_na_entrada(ambiente, monkeypatch):
-    """Antes, a leitura falhava, a funcao devolvia 0 sem levantar, e o fluxo
-    seguia para commit + backup: o arquivo saia da entrada sem nunca ter
-    entrado no banco. Ja aconteceu com um xlsx corrompido."""
+    """No original, leitura falhava, upload_file devolvia 0 sem levantar, e o
+    fluxo seguia para commit + backup: o arquivo saia da entrada sem nunca ter
+    entrado no banco. Aconteceu em 05/08/2026 ('File is not a zip file')."""
     entrada, backup, _ = ambiente
     arquivo = _criar_csv(entrada / "itens", "quebrado.xlsx", "isto nao e um xlsx")
 
@@ -142,13 +142,13 @@ def test_carga_bem_sucedida_move_para_backup(ambiente, monkeypatch):
 # CORRECAO 3 — falha de arquivo chega ao exit code
 # ─────────────────────────────────────────────────────────────
 def test_main_devolve_erro_quando_arquivo_falha(ambiente, monkeypatch):
-    """Antes saia com 0 e o orquestrador registrava SUCESSO enquanto arquivos
-    falhavam — foi o que escondeu uma quebra por dias seguidos."""
+    """O original saia com 0 e o rodar_etl.ps1 registrava SUCESSO enquanto
+    arquivos falhavam — foi o que escondeu a quebra de 01 a 03/08/2026."""
     entrada, _, _ = ambiente
     _criar_csv(entrada / "itens", "quebrado.xlsx", "nao e xlsx")
 
     monkeypatch.setattr(upload, "ESTRATEGIAS", {"itens": {"estrategia": "replace"}})
-    monkeypatch.setattr(upload, "configurar_log", lambda: None)
+    monkeypatch.setattr(upload, "configurar_log", lambda _: None)
 
     assert upload.main() == 1
 
@@ -168,7 +168,7 @@ def test_falha_de_infraestrutura_nao_vira_traceback(tmp_path, monkeypatch, caplo
 
     monkeypatch.setattr(upload, "ENTRADA_VPS", entrada)
     monkeypatch.setattr(upload, "conexao", conexao_que_falha)
-    monkeypatch.setattr(upload, "configurar_log", lambda: None)
+    monkeypatch.setattr(upload, "configurar_log", lambda _: None)
 
     assert upload.main() == 1
     assert "INFRAESTRUTURA" in caplog.text
@@ -180,7 +180,7 @@ def test_main_devolve_zero_quando_tudo_carrega(ambiente, monkeypatch):
     _criar_csv(entrada / "itens", "ok.csv", "sku;valor\nA1;10\n")
 
     monkeypatch.setattr(upload, "ESTRATEGIAS", {"itens": {"estrategia": "replace"}})
-    monkeypatch.setattr(upload, "configurar_log", lambda: None)
+    monkeypatch.setattr(upload, "configurar_log", lambda _: None)
 
     assert upload.main() == 0
 
@@ -209,12 +209,46 @@ def test_um_arquivo_ruim_nao_impede_os_outros(ambiente, monkeypatch):
 # ─────────────────────────────────────────────────────────────
 # Nome de tabela a partir da pasta
 # ─────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────
+# Faturamento é do pipeline horário, não do diário
+# ─────────────────────────────────────────────────────────────
+def test_diario_nao_carrega_faturamento(ambiente, monkeypatch):
+    """O faturamento roda de hora em hora. Se o diário carregasse também, as
+    duas execuções disputariam a mesma tabela."""
+    entrada, backup, _ = ambiente
+    fat = _criar_csv(entrada / "faturamento", "nf.csv", "emissao;valor\n01/08/2026;10\n")
+    outro = _criar_csv(entrada / "itens", "ok.csv", "sku;valor\nA1;10\n")
+
+    monkeypatch.setattr(
+        upload,
+        "ESTRATEGIAS",
+        {"itens": {"estrategia": "replace"}, "faturamento": {"estrategia": "replace"}},
+    )
+
+    assert upload.varrer() == 0
+
+    assert fat.exists(), "faturamento tem que ficar pro pipeline horário"
+    assert not outro.exists(), "itens é do diário, deve ter sido carregado"
+
+
+def test_da_pra_pedir_o_faturamento_explicitamente(ambiente, monkeypatch):
+    """Passando pular=set(), o upload volta a processar tudo — é assim que o
+    pipeline horário reusa esta função."""
+    entrada, _, _ = ambiente
+    fat = _criar_csv(entrada / "faturamento", "nf.csv", "sku;valor\nA;1\n")
+
+    monkeypatch.setattr(upload, "ESTRATEGIAS", {"faturamento": {"estrategia": "replace"}})
+
+    assert upload.varrer(pular=set()) == 0
+    assert not fat.exists(), "com pular vazio, o faturamento é carregado"
+
+
 @pytest.mark.parametrize(
     "pasta,esperado",
     [
         ("faturamento", "Faturamento"),
-        ("custo_por_deposito", "CustoPorDeposito"),
-        ("Vendedores ilha growth", "VendedoresIlhaGrowth"),
+        ("sku_custo", "SkuCusto"),
+        ("Vendedores ilha 1", "VendedoresIlha1"),
         ("itens", "Itens"),
         ("base-blacklist-marca", "BaseBlacklistMarca"),
         ("v4 Google Ads", "V4GoogleAds"),
@@ -227,19 +261,48 @@ def test_nome_tabela(pasta, esperado):
 @pytest.mark.parametrize(
     "pasta,esperado",
     [
-        ("tabela-preço-promocao", "TabelaPrecoPromocao"),
         ("integração", "Integracao"),
         ("posição estoque", "PosicaoEstoque"),
+        ("preço promocao", "PrecoPromocao"),
     ],
 )
 def test_nome_tabela_translitera_acento(pasta, esperado):
-    """Bug encontrado na pasta real 'tabela-preço-promocao'.
+    """Bug encontrado numa pasta de producao com "ç" no nome.
 
     O split direto em [^a-zA-Z0-9] tratava o acento como separador: "preço"
-    virava "pre" + "o", gerando `TabelaPreOPromocao`. Presente tambem no
-    codigo original.
+    virava "pre" + "o". Presente tambem no codigo original.
+
+    A pasta que expos o bug esta hoje em NOMES_FIXOS (ver o teste abaixo), mas a
+    correcao continua valendo pra qualquer outra pasta acentuada.
     """
     assert upload.nome_tabela(pasta) == esperado
+
+
+def test_nome_fixo_preserva_o_nome_que_esta_no_banco(monkeypatch):
+    """CICATRIZ: tabela que existe no banco com o nome corrompido pelo bug do ç.
+
+    A transliteracao geraria o nome certo — tabela NOVA, deixando a antiga orfa
+    e o consumidor lendo dado congelado. A entrada em NOMES_FIXOS mantem o nome
+    que ja esta la.
+    """
+    monkeypatch.setattr(upload, "NOMES_FIXOS", {"tabela-preço-x": "TabelaPreOX"})
+
+    assert upload.nome_tabela("tabela-preço-x") == "TabelaPreOX"
+
+
+def test_nome_fixo_nao_depende_de_caixa_da_pasta(monkeypatch):
+    # O nome da pasta na rede pode vir com caixa diferente.
+    monkeypatch.setattr(upload, "NOMES_FIXOS", {"tabela-preço-x": "TabelaPreOX"})
+
+    assert upload.nome_tabela("Tabela-Preço-X") == "TabelaPreOX"
+    assert upload.nome_tabela("  tabela-preço-x  ") == "TabelaPreOX"
+
+
+def test_sem_nome_fixo_a_transliteracao_vale(monkeypatch):
+    """Sem entrada em NOMES_FIXOS, o ç vira 'c' como deve ser."""
+    monkeypatch.setattr(upload, "NOMES_FIXOS", {})
+
+    assert upload.nome_tabela("tabela-preço-x") == "TabelaPrecoX"
 
 
 # ─────────────────────────────────────────────────────────────
