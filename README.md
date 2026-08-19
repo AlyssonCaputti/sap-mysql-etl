@@ -1,228 +1,283 @@
-# ETL — Atualizar VPS (refatorado)
+# ETL SAP → MySQL
 
-Sincroniza dados de vendas do SAP para o MySQL da VPS, que alimenta os
-dashboards e o Forecast.
+Pipeline que sincroniza dados de vendas de um SAP Business One para o MySQL que
+alimenta os dashboards e o forecast de compra de estoque. Roda em produção,
+sozinho, algumas vezes por hora.
 
-Refatoração de um pipeline anterior, que permanece intocado — este é um projeto
-novo, lado a lado.
+É a refatoração de um pipeline que já existia e já tinha quebrado de várias
+formas. Isso muda o que importa aqui: cada proteção no código existe porque um
+incidente aconteceu, e a maior parte do trabalho foi descobrir **quais** falhas
+o código antigo escondia — não reescrever bonito.
 
----
+## O que estava errado
 
-## Estrutura
+O pipeline antigo "funcionava". Rodava todo dia, exit code 0, log dizendo
+sucesso. Três coisas aconteciam por baixo disso:
+
+**Ele registrava sucesso enquanto a base parava.** O uploader logava o erro de
+cada arquivo e saía com código 0. O script agendado só olha o exit code, então
+o painel mostrava verde. Foi assim que três dias seguidos sem carga passaram sem
+ninguém notar — um CSV separado por vírgula estava sendo lido com `;`, virava
+uma coluna só com o cabeçalho inteiro no nome, e o MySQL recusava por
+identificador longo demais.
+
+**Ele arquivava arquivo que não tinha carregado.** A função de upload devolvia
+`0` sem levantar exceção quando a leitura falhava, e o arquivo ia pro backup de
+qualquer jeito. O dado do dia saía da pasta de entrada sem nunca ter entrado no
+banco.
+
+**Ele criava duplicata que ninguém conseguia apagar.** A estratégia de carga
+por período apaga a janela de datas e reinsere. Linha com data ilegível passava
+pelo aviso e entrava — mas o `DELETE` filtra por `STR_TO_DATE`, que devolve
+`NULL` justamente nessas linhas, e `NULL BETWEEN x AND y` nunca é verdadeiro.
+Elas entravam e **nenhuma carga futura conseguia removê-las**. Cada rodada
+somava outra cópia.
+
+E o que mais doeu, encontrado medindo: **um terço da base de itens era
+descartado em silêncio.** A detecção de "CSV quebrado" fazia `split(",")` cru
+numa amostra, então qualquer arquivo bem-formado com vírgula dentro de campo
+entre aspas parecia quebrado e caía num reconstrutor heurístico:
 
 ```
-config/
-  settings.py       caminhos e credenciais (antes hardcoded em 6 arquivos)
-  tables.py         estratégia de carga + contratos de schema por tabela
-src/
-  io/readers.py     leitura resiliente (encoding, separador, XML, decimal BR)
-  io/database.py    conexão, DDL, insert em lote — SQL parametrizado
-  transform/        clientes, faturamento, itens — funções puras, sem I/O
-  load/strategies.py replace / truncate / date_range / upsert
-  load/views.py     VIEW ItensCompleto
-  quality/contracts.py validação de schema e normalização de colunas
-  quality/checkpoints.py portas 1 e 2 + conferência de saída
-pipelines/
-  preparar.py       origens → CSVs tratados
-  upload.py         CSVs → MySQL
-  faturamento_full.py tabela analítica (JOIN no banco)
-  sku_custo.py      carga incremental por hash (a cada 5 min)
-dados/              origens brutas do SAP (uma pasta por entidade)
-  para_vps/         saída tratada — o nome da pasta vira o nome da tabela
-tests/              159 testes, rodam sem banco e sem acesso à rede
-.claude/            skills e relatórios (fora do git)
+csv.reader (respeita aspas):  2.922 de 2.922 linhas OK
+split(",") cru:                  88 de 2.937 linhas OK
+reconstrutor heurístico:      1.952 linhas — 984 DESCARTADAS (33%)
 ```
 
-## Documentação
+O campo culpado era `"17"" 205 50 ZR17 93W XL D7"` — aspas escapadas dentro de
+campo citado. Um terço dos itens sumia com um aviso no log que ninguém lia.
 
-`.claude/relatorios/RELATORIO.md` — documento único, na ordem em que faz sentido
-ler se está chegando agora:
+## O que mudou na prática
 
-1. o que o pipeline faz e as decisões de design (seções 1-2)
-2. as 15 cicatrizes de produção e os 3 críticos corrigidos (3-4)
-3. onde o tempo vai e o que foi otimizado, 52s → 27,5s (5)
-4. a decisão em aberto mais importante — LONGTEXT — e por que a recomendação
-   é não mexer (6)
-5. auditoria por dimensão, scorecard e pendências (7-9)
-
-As skills que produziram esses documentos estão em `.claude/skills/`
-(`refatorar-etl` e `auditar-etl`).
-
-## Uso
-
-```powershell
-pip install -r requirements.txt
-copy .env.example .env          # preencher credenciais
-
-.\rodar_etl.ps1                 # diário: clientes e itens
-.\rodar_faturamento_horario.ps1 # de hora em hora: faturamento + faturamento_full
-.\rodar_sku_custo.ps1           # a cada 5 min: custo por depósito
-
-python -m pipelines.preparar clientes             # uma etapa só
-python -m pipelines.faturamento_horario --status  # relata sem escrever
-python -m pytest tests/ -v                        # testes
-```
-
-## O que roda quando
-
-| Tarefa Agendada | Frequência | O que atualiza |
+| | antes | depois |
 |---|---|---|
-| `rodar_faturamento_horario.ps1` | 1 hora | `Faturamento` + `faturamento_full` |
-| `rodar_etl.ps1` | 1 dia | `Clientes`, `Itens`, `ItensExtra*` |
-| `rodar_sku_custo.ps1` | 5 min | `SkuCusto` |
+| falha na carga | exit 0, log verde | exit ≠ 0, tarefa agendada acusa |
+| arquivo que falhou | ia pro backup | fica na entrada pra nova tentativa |
+| data ilegível | entrava e travava lá | aborta com a lista dos valores |
+| linhas de itens | 1.952 (33% descartado) | 2.922 |
+| ciclo do faturamento | ~140s | ~76s |
+| preparação completa | 52s | 27,5s |
+| testes | 0 | 164 |
 
-O faturamento **não** está no diário — se as duas cargas rodassem, disputariam
-a mesma tabela. O `upload.py` pula a pasta `Faturamento` por padrão
-(`PASTAS_DE_OUTRO_PIPELINE`).
+As **+984 linhas de itens** valem mais que os segundos. Velocidade se recupera
+comprando máquina; dado descartado em silêncio, não.
 
-Os dois pipelines frequentes comparam o hash da origem antes de trabalhar: sem
-mudança, saem calados. E usam lock, então se uma carga demorar mais que o
-intervalo, a rodada seguinte é pulada em vez de rodar em paralelo.
+## Carga incremental: 256 mil linhas viram 11 mil
 
-### Carga incremental do faturamento
-
-A origem publica o CSV inteiro (100 MB, 256 mil linhas) toda hora, mas o que
-muda é quase só o mês corrente — 1,3% do total. Reprocessar tudo pra atualizar
-isso seria desperdício.
+A origem republica o CSV inteiro (100 MB, 256 mil linhas) de hora em hora, mas
+o que muda é quase só o mês corrente — 1,3% do total. Reprocessar tudo pra
+atualizar isso é desperdício puro.
 
 O pipeline converte o CSV tratado num Parquet particionado por mês e carrega no
-MySQL só os **2 últimos meses**. Dois em vez de um por causa de nota
-retroativa: se a origem lançar hoje uma nota com emissão do mês passado, uma
-janela de 1 mês não a pegaria.
+MySQL só os **dois últimos meses**:
 
-| | antes | agora |
+|  | antes | agora |
 |---|---|---|
 | leitura | 11s (CSV 100 MB) | 0,1s (Parquet 16 MB) |
 | linhas carregadas | 256.352 | 11.315 |
 | INSERT | ~45s | ~3s |
-| ciclo completo | ~140s | **~76s** |
 
-O `faturamento_full` continua sendo refeito **inteiro** (46s do ciclo). Não dá
-pra fazer só a janela: a ilha do cliente vem da última compra da marca foco em
-todo o histórico, então quem comprou há meses apareceria como `outros`.
+Dois meses e não um por causa de nota retroativa: se a origem lançar hoje uma
+nota com emissão do mês passado, uma janela de um mês não pegaria.
 
-Para recarregar o histórico completo (depois de corrigir dado antigo, por
-exemplo): `python -m pipelines.faturamento_horario --tudo`.
+A tabela analítica continua sendo refeita **inteira**, e isso é decisão, não
+esquecimento: a carteira do cliente vem da última compra dele da marca foco em
+todo o histórico, então com só a janela quem comprou há meses apareceria como
+"outros".
 
-### Qualidade de dado — três pontos de checagem
+### O bug que essa otimização criou
 
-Cada carga loga uma linha em três momentos, para dar pra responder "o dado está
-bom?" sem abrir o banco (`src/quality/checkpoints.py`):
+Vale registrar porque é o tipo de coisa que só aparece quando você testa a
+composição, não as peças.
 
-| Ponto | O que reporta |
-|---|---|
-| **porta 1** — recepção | linhas × colunas lidas, linhas vazias, avisos, queda brusca de volume |
-| **porta 2** — transformação | linhas perdidas no tratamento, chave duplicada/vazia, janela de datas, datas ilegíveis e futuras |
-| **saída** — carga | contagem por mês da origem × banco, separando o que caiu dentro e fora da janela |
+A janela saía dos meses que *existiam* no disco, e o `DELETE` apagava o
+intervalo contínuo `min..max`. Cada função estava certa sozinha. Juntas, com um
+mês sem emissão no meio:
 
-O checkpoint de saída é o que enxerga a nota retroativa: quando uma linha existe
-na origem mas está fora da janela de 2 meses, ele avisa e sugere o `--tudo`.
-Medido em 18/08/2026: 48 linhas nessa situação (2024-12, 2025-01 e 2026-06).
+```
+partições: 2026-08, 2026-10   (setembro sem nota)
+janela:    [2026-08, 2026-10]
+DELETE:    2026-08-01 .. 2026-10-31   ← inclui setembro
+INSERT:    repõe só agosto e outubro
+resultado: setembro apagado do banco
+```
 
----
+Agora a janela sai do calendário e o `DELETE` apaga mês a mês, com `IN` em vez
+de `BETWEEN`. Junto disso: emissão no futuro passa a abortar antes de gravar
+(uma nota com ano digitado errado criava partição que travava a janela pra
+sempre), e o fallback `%m/%d/%Y` do parser de datas foi removido — ele lia
+`03/08/2026` como 8 de março e mandava a linha pro mês errado, calado.
 
-## O que mudou, e por quê
+## Três pontos de checagem
 
-### 3 correções críticas
+A pergunta que eu quero responder olhando o log, sem abrir o banco: **o dado
+está bom?**
 
-**1. Duplicidade permanente no `date_range`** — `src/load/strategies.py`
+```
+origem → [porta 1] → transformação → [porta 2] → carga → [saída] → MySQL
+```
 
-O original avisava sobre datas ilegíveis e as inseria assim mesmo. O `DELETE`
-da estratégia filtra por `STR_TO_DATE`, que devolve `NULL` nessas linhas, e
-`NULL BETWEEN x AND y` nunca é verdadeiro — então elas entravam no banco e
-**nenhuma carga futura conseguia removê-las**. Cada rodada somava outra cópia.
-Agora a carga aborta com a lista dos valores problemáticos.
+| ponto | o que reporta | se falha aqui, o problema é |
+|---|---|---|
+| **porta 1** | linhas × colunas, linhas vazias, queda brusca de volume | da origem — cobra de quem exporta |
+| **porta 2** | linhas perdidas no tratamento, chave duplicada ou vazia, datas ilegíveis e futuras | meu, entre uma porta e outra |
+| **saída** | contagem por mês, origem × banco | da janela de carga |
 
-**2. Backup de arquivo que não carregou** — `pipelines/upload.py`
+A separação é o que torna o erro acionável. Porta 1 vermelha me faz abrir o
+arquivo; porta 2 vermelha me faz abrir o `transform.py`.
 
-O original movia o arquivo para o `_backup` mesmo quando a leitura falhava
-(`upload_file` devolvia `0` sem levantar exceção). O dado do dia sumia da pasta
-de entrada sem nunca ter entrado no banco. Aconteceu em 05/08/2026
-(`File is not a zip file`). Agora o backup só ocorre após commit bem-sucedido;
-o que falha permanece na entrada para nova tentativa.
+O checkpoint de saída é o que enxerga o caso mais chato: linha que **existe na
+origem, é válida, e nunca vai subir** porque caiu fora da janela de dois meses.
+Rodando contra o banco real ele achou 48 linhas nessa situação, espalhadas por
+três meses distintos — nenhuma detectável pelas validações normais, porque
+individualmente cada linha está perfeita.
 
-**3. Falha silenciosa no exit code** — `pipelines/upload.py`
+## Como as tabelas são carregadas
 
-O original logava o erro por arquivo e saía com código 0. O `rodar_etl.ps1` só
-checa `$LASTEXITCODE`, então registrava **sucesso** enquanto arquivos falhavam.
-Foi o que escondeu a quebra de 01 a 03/08/2026 — três dias seguidos. Agora
-qualquer falha propaga para o exit code.
+Uma pasta = uma tabela. O nome da pasta vira o nome da tabela, então adicionar
+tabela é criar pasta, sem tocar em código.
 
-### Correção adicional (encontrada nos dados reais)
+| estratégia | mecanismo | onde | por quê |
+|---|---|---|---|
+| `date_range` | DELETE da janela + INSERT | faturamento | carga parcial sem perder histórico |
+| `upsert` | ON DUPLICATE KEY UPDATE | clientes | coluna que sumiu da origem mantém valor antigo |
+| `replace` | tabela nova + RENAME | itens, custo | cadastro completo, sem histórico |
+| `truncate` | TRUNCATE + INSERT | vendedores | preserva schema ajustado na mão |
 
-**Acento no nome da pasta corrompia o nome da tabela.** Uma pasta de produção
-com `ç` no nome gerava `` `...PreO...` `` — o split em `[^a-zA-Z0-9]` tratava o
-`ç` como separador. Agora translitera antes de separar. A tabela que já existia
-com o nome corrompido fica como está, via `ETL_NOMES_LEGADOS`.
+As quatro são idempotentes — rodar duas vezes dá o mesmo estado. O `replace`
+monta numa tabela temporária e só faz `RENAME` no fim: erro no meio não deixa o
+banco sem a tabela (já deixou, uma vez, quando o `DROP` vinha primeiro).
 
-### Reorganização
+A conferência pós-carga roda `COUNT(*)` **dentro da transação**, antes do
+commit. Divergência entre o que mandei e o que chegou levanta exceção e cai no
+rollback.
 
-| Antes | Depois |
-|---|---|
-| 4 implementações divergentes de leitura de CSV | 1 em `src/io/readers.py` |
-| Caminho de rede hardcoded em 6 arquivos | `config/settings.py` |
-| Transformação executada no import do módulo | funções puras + `main()` |
-| SQL por concatenação de string | parâmetros + validação de identificador |
-| `except Exception: pass` | erro com causa e sugestão |
-| Porta padrão 8080 em 2 arquivos, 3306 em 2 | 3306 em todos |
-| `.gitignore` com `*.txt` engolia `requirements.txt` | corrigido |
-| 0 testes | 114 testes |
+## As cicatrizes
 
----
+Todo trecho defensivo aqui previne uma falha que já aconteceu. Os testes
+marcados `CICATRIZ` reproduzem o incidente, e o comentário no código diz qual
+foi. Se você acha que algum deles é paranoia, provavelmente é — a paranoia
+custou três dias de base parada uma vez.
 
-## As 15 cicatrizes foram preservadas
-
-Todo trecho defensivo do original migrou intacto — cada um previne uma falha
-real e documentada. Os testes marcados `CICATRIZ` reproduzem o incidente:
-
-- caracteres de controle ilegais no XML do SAP quebrando o openpyxl
-- header técnico virando português (clientes 01/07, itens 23/07)
-- coluna opcional sumindo da origem sem aviso (23/07)
+- caracteres de controle no XML do `.xlsx` quebrando o parser
+- cabeçalho técnico do SAP virando português, duas vezes, sem aviso
+- coluna opcional sumindo da origem de um dia pro outro
 - vendedor duplicado multiplicando linhas de cliente no LEFT JOIN
-- decimais BR sem aspas (`399,89`) quebrando o split por vírgula
-- exportação alternando entre UTF-8 e UTF-16
-- typo na origem (`confins` por `cofins`)
-- origem alternando entre `1.399,90` e `759.90`
-- separador vírgula lido como `;` → base parada 3 dias (01–03/08)
-- `NaN` serializado como literal `nan` no INSERT
-- `STR_TO_DATE` abortando query em vez de devolver NULL
-- publicar tabela sem custo derrubando a MCB para fallback silencioso
+- decimal BR sem aspas (`399,89`) partindo em dois no split por vírgula
+- mesmo arquivo exportado em UTF-8 num dia e UTF-16 no outro
+- typo na origem (`confins` por `cofins`) que persiste até hoje
+- origem alternando entre `1.399,90` e `759.90` no mesmo campo
+- separador vírgula lido como `;` → base parada três dias
+- `NaN` do pandas virando o texto literal `nan` no INSERT
+- `STR_TO_DATE` abortando a query inteira em vez de devolver NULL
+- tabela sem custo derrubando o cálculo de margem pra fallback silencioso
 - arquivo vazio substituindo tabela boa
-- parcela vazia zerando a MC inteira por NULL propagation
+- uma parcela vazia zerando a margem inteira por NULL propagation
 - limite de ~196 colunas LONGTEXT forçando o fatiamento de itens
 
----
+## Rodando
 
-## Verificação executada
+```bash
+pip install -r requirements.txt
+cp .env.example .env    # preencher credenciais e caminhos
 
-- **164 testes passam** (`python -m pytest tests/`)
-- **Regressão confirmada**: revertendo a correção 1, 2 testes falham; restaurada,
-  todos passam — os testes checam comportamento, não passam por acidente
-- **Os 8 arquivos reais de produção leem corretamente**, incluindo o CSV de
-  custo separado por vírgula, que o código antigo transformava numa coluna única
-- **CSV de faturamento real** (255.379 linhas): nenhuma data ilegível; janela
-  02/01/2024 → 11/08/2026 — a correção 1 não bloquearia a carga atual
+python -m pipelines.preparar              # origens → CSVs tratados
+python -m pipelines.upload                # CSVs → MySQL
+python -m pipelines.faturamento_horario   # carga incremental + tabela analítica
 
-## Carga validada contra o banco
+python -m pipelines.faturamento_horario --status   # relata sem escrever
+python -m pipelines.faturamento_horario --tudo     # recarrega o histórico todo
+python -m pytest tests/                            # 164 testes, ~3s
+```
 
-Faturamento, Clientes, Itens e faturamento_full já foram carregados e
-conferidos contra uma baseline tirada antes:
+No Windows, os `.ps1` na raiz são o que as Tarefas Agendadas chamam:
 
-| Tabela | Antes | Depois |
+| tarefa | frequência | atualiza |
 |---|---|---|
-| Faturamento | 254.390 | 255.439 |
-| Clientes | 14.581 | 14.599 |
-| Itens | 2.901 | 2.922 |
-| faturamento_full | 254.390 | 255.439 |
+| `rodar_faturamento_horario.ps1` | 1 hora | faturamento + tabela analítica |
+| `rodar_etl.ps1` | 1 dia | clientes, itens |
+| `rodar_sku_custo.ps1` | 5 min | custo por depósito |
 
-Estrutura idêntica nas quatro (mesmas colunas), `mc` batendo com a fórmula em
-255.439 linhas sem nenhum NULL, e a view `ItensCompleto` respondendo.
+Os dois pipelines frequentes comparam o hash da origem antes de trabalhar e
+**saem calados quando nada mudou** — rodando a cada 5 minutos, logar "sem
+mudança" 288 vezes por dia enterra o que importa. Usam lock com expiração,
+então carga que demore mais que o intervalo faz a rodada seguinte ser pulada em
+vez de rodar em paralelo na mesma tabela.
 
-## Pontos em aberto
+## Estrutura
 
-- Tipagem do destino (`LONGTEXT` para tudo) continua como está. Ver a seção 6 do
-  `RELATORIO.md`: mudar quebraria o Forecast em silêncio.
-- `ETL/mcb/` do projeto antigo não foi portado — são scripts manuais, fora do
-  fluxo agendado.
-- O usuário do banco não tem `SESSION_VARIABLES_ADMIN`. O código lida com isso,
-  mas vale saber ao criar tabela nova com muitas colunas.
+```
+config/       caminhos, credenciais, estratégia e contrato por tabela
+src/
+  io/         leitura resiliente e acesso ao banco. Sem regra de negócio.
+  transform/  uma função pura por entidade. Sem I/O — testa sem infra.
+  quality/    contrato de schema e os três pontos de checagem
+  load/       as quatro estratégias de carga
+pipelines/    orquestração: quem roda em que ordem
+tests/        164 testes, nenhum precisa de banco ou rede
+```
+
+A separação `io` / `transform` é o que permite os testes rodarem em 3 segundos
+sem MySQL: transformação recebe e devolve DataFrame, e quem faz I/O é injetado.
+
+## Testes
+
+164, rodando em ~3s, sem banco e sem rede — cursor falso pro MySQL, pasta
+temporária pros arquivos.
+
+O que eu me preocupei em cobrir, em ordem:
+
+- **as três falhas silenciosas**, cada uma com o cenário que a causou.
+  Verifiquei por regressão: revertendo a correção da carga por período, dois
+  testes falham
+- **a margem de contribuição**, em duas frentes — composição do SQL (parcelas,
+  sinais, contagem de colunas do INSERT batendo com o SELECT) e execução real
+  da aritmética em SQLite. Era o gap que mais importava: é o número que decide
+  compra de estoque, e só era validável rodando contra o MySQL, então na
+  prática ninguém validava. Injetei 5 erros distintos na fórmula e todos foram
+  pegos
+- **a janela de meses**: gap entre partições, data futura, e equivalência com o
+  comportamento anterior nos dados reais
+- **edge cases que já apareceram na origem**: NULL, string vazia, data
+  inválida, arquivo vazio, schema inesperado, acento, duplicado, UTF-16,
+  decimal BR ambíguo, e identificador malicioso do tipo `tabela; DROP TABLE x`
+
+Sem cobertura ainda: `preparar.py` e `load/views.py`.
+
+## Dívida conhecida
+
+**Tudo é `LONGTEXT` no destino.** Isso mata índice, obriga `CAST` em quem
+consulta, e é o motivo do fatiamento de itens (o servidor não aguenta 475
+colunas LONGTEXT numa tabela, então a origem é dividida em várias e uma VIEW
+recompõe).
+
+Investiguei tipar e a recomendação é **não mexer agora**. O ganho principal é
+performance, e o gargalo medido é rede e round-trip, não CPU de query. Já o
+risco é assimétrico: um dos consumidores tem um parser de decimal BR
+hardcoded que faz `.replace('.', '')` pra tirar separador de milhar. Com a
+coluna virando `DECIMAL`, esse `replace` passa a comer o ponto decimal e infla
+o valor em 100×. Sem exceção, sem log — e o filtro seguinte (`custo > 0`)
+aceita valor inflado numa boa.
+
+Errar aqui corrompe o cálculo de margem em silêncio, e esse número decide
+compra de estoque. Não vale trocar full scan por isso.
+
+Outras pendências honestas:
+
+- validação de domínio não existe: o pipeline aceita UF inválida, CNPJ vazio ou
+  emissão em 2099 sem reclamar. É risco, não problema ativo — nenhuma dessas
+  apareceu nos logs
+- sem alerta automático por volume anormal ou freshness. O exit code ≠ 0
+  permite que a tarefa agendada avise, e é o mínimo viável
+- `_backup/` acumula CSVs indefinidamente, e eles têm dado pessoal de cliente.
+  Falta política de expurgo
+
+## Escala
+
+Isto é um pipeline de ~8 arquivos por dia, 260 mil linhas, mantido por uma
+pessoa. A arquitetura é proporcional a isso de propósito.
+
+Com 10× o volume, pandas ainda serve (ajuste provável é `chunksize` na
+leitura). Com 100×, deixa de servir — e o caminho **não é Spark**, é empurrar a
+transformação pro banco (a tabela analítica já faz isso) ou DuckDB/Polars
+local. Cluster pra pipeline de uma pessoa é trocar um problema por dois.
