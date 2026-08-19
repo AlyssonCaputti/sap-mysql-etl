@@ -2,6 +2,7 @@ pandas==3.0.1
 numpy==2.4.3
 openpyxl==3.1.5          # engine de .xlsx (fallback e caminho sanitizado)
 python-calamine==0.5.3   # engine rapida de .xlsx: 4,8x sobre openpyxl
+pyarrow==22.0.0          # cache do faturamento em Parquet particionado
 mysql-connector-python==9.6.0
 python-dotenv==1.2.2
 pytest==8.4.2

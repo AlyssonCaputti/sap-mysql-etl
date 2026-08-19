@@ -1,5 +1,9 @@
-# Orquestrador do ETL diario.
+# Orquestrador do ETL diario: clientes e itens.
 # Somente ASCII: o PowerShell 5.1 le .ps1 como ANSI e acentos quebram o parser.
+#
+# O FATURAMENTO NAO ESTA AQUI. Ele roda de hora em hora, junto com o
+# faturamento_full, pelo rodar_faturamento_horario.ps1. Se voltar a rodar
+# tambem aqui, as duas cargas disputam a mesma tabela.
 #
 # Cada etapa aborta o pipeline se falhar. O upload devolve exit code != 0
 # quando QUALQUER arquivo falha -- sem isso o log registra sucesso enquanto
@@ -22,9 +26,10 @@ function Log($msg) {
     Add-Content -Path $LOG -Value $linha -Encoding UTF8
 }
 
-function Etapa($nome, $modulo) {
+function Etapa($nome, $modulo, $argumentos) {
     Log "--- $nome ---"
-    & $PYTHON -m $modulo
+    if ($argumentos) { & $PYTHON -m $modulo @argumentos }
+    else             { & $PYTHON -m $modulo }
     if ($LASTEXITCODE -ne 0) {
         Log "ERRO em $nome (exit $LASTEXITCODE) - abortando."
         exit 1
@@ -34,9 +39,8 @@ function Etapa($nome, $modulo) {
 Log "========================================="
 Log "ETL diario iniciando..."
 
-Etapa "preparar"        "pipelines.preparar"
-Etapa "upload"          "pipelines.upload"
-Etapa "faturamento_full" "pipelines.faturamento_full"
+Etapa "preparar" "pipelines.preparar" @("clientes", "itens")
+Etapa "upload"   "pipelines.upload"
 
 Log "ETL diario concluido com sucesso."
 Log "========================================="

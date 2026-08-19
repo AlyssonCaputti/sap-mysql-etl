@@ -41,7 +41,7 @@ def detectar_encoding(caminho: Path) -> str:
 def detectar_separador(caminho: Path, encoding: str) -> str:
     """Conta ',' e ';' no cabeçalho e fica com quem aparece mais.
 
-    Isso já derrubou a carga por dias seguidos: um CSV
+    Em 01-03/08/2026 a base ficou 3 dias sem carregar por causa disso: um CSV
     separado por vírgula era lido com ';', virava uma coluna só com o cabeçalho
     inteiro no nome, e o MySQL recusava com "Identifier name too long".
     """

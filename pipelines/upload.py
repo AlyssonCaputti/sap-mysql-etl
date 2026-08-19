@@ -7,17 +7,24 @@ import datetime
 import logging
 import re
 import shutil
-import sys
 import time
 import unicodedata
 from pathlib import Path
 
-from config.settings import BACKUP, ENTRADA_VPS, PASTA_LOGS
-from config.tables import CONTRATOS, ESTRATEGIA_PADRAO, ESTRATEGIAS
+from config.settings import BACKUP, ENTRADA_VPS, EXTENSOES_DADOS
+from config.tables import (
+    CONTRATOS,
+    ESTRATEGIA_PADRAO,
+    ESTRATEGIAS,
+    NOMES_LEGADOS,
+)
 from src.io.database import conexao, validar_identificador
+from src.io.execucoes import registrar
+from src.io.log import configurar as configurar_log
 from src.io.readers import ler_arquivo
 from src.load.strategies import executar
 from src.load.views import criar_view_itens_completo
+from src.quality.checkpoints import porta1_recepcao, porta2_transformacao
 from src.quality.contracts import (
     exigir_nao_vazio,
     normalizar_colunas,
@@ -26,7 +33,12 @@ from src.quality.contracts import (
 
 log = logging.getLogger(__name__)
 
-EXTENSOES = (".csv", ".xlsx", ".xlsm")
+EXTENSOES = EXTENSOES_DADOS
+
+# Pastas que outro pipeline carrega. O faturamento roda de hora em hora
+# (pipelines/faturamento_horario.py) e não pode ser carregado aqui também —
+# duas cargas simultâneas na mesma tabela dão problema.
+PASTAS_DE_OUTRO_PIPELINE = {"faturamento"}
 
 # Nessas duas a tabela inteira vem do arquivo, então a contagem tem que bater.
 # Em date_range sobra o histórico de fora da janela e em upsert as linhas são
@@ -34,13 +46,32 @@ EXTENSOES = (".csv", ".xlsx", ".xlsm")
 _CONFERE_CONTAGEM = {"replace", "truncate"}
 
 
+# Pasta acentuada cujo nome de tabela no banco veio do bug do "ç" (o split em
+# [^a-zA-Z0-9] tratava o acento como separador). O bug está corrigido abaixo,
+# mas a tabela em produção continua com o nome antigo e há consumidor apontado
+# pra ela — gerar o nome certo criaria tabela nova e deixaria a antiga parada,
+# alimentando dashboard com dado congelado.
+#
+# Manter o nome é decisão consciente. Pra renomear é preciso mudar o banco e os
+# consumidores juntos, e então a entrada sai daqui.
+NOMES_FIXOS = {c["pasta"]: c["tabela"] for c in NOMES_LEGADOS}
+
+
 def nome_tabela(nome_pasta: str) -> str:
-    """'sku custo giba' -> 'SkuCustoGiba'.
+    """'sku custo' -> 'SkuCusto'.
 
     Tiro o acento antes de quebrar em palavras, senão o "ç" de
-    'tabela-preço-promocao' vira separador e sai `TabelaPreOPromocao`.
+    'tabela-preço-x' vira separador e sai `TabelaPreOX`.
+
+    Pasta listada em NOMES_FIXOS escapa dessa regra e usa o nome que já está no
+    banco — a correção não vale a pena quando renomear a tabela é o risco.
     """
-    nome = unicodedata.normalize("NFKD", str(nome_pasta).strip())
+    bruto = str(nome_pasta).strip()
+    fixo = NOMES_FIXOS.get(bruto.lower())
+    if fixo:
+        return fixo
+
+    nome = unicodedata.normalize("NFKD", bruto)
     nome = "".join(c for c in nome if not unicodedata.combining(c))
     partes = re.split(r"[^a-zA-Z0-9]+", nome)
     return "".join(p.capitalize() for p in partes if p) or "Tabela"
@@ -95,6 +126,9 @@ def carregar_arquivo(caminho: Path, chave_pasta: str, cursor) -> int:
         # Aviso de leitura = linha jogada fora. Sobe como warning pra não sumir.
         log.warning("  REJEITADAS: %s", aviso)
 
+    porta1_recepcao(df, caminho.name, avisos)
+    linhas_lidas = len(df)
+
     exigir_nao_vazio(df, caminho.name)
     df = normalizar_colunas(df)
 
@@ -103,7 +137,12 @@ def carregar_arquivo(caminho: Path, chave_pasta: str, cursor) -> int:
         for aviso in validar_contrato(df, contrato, caminho.name):
             log.warning("  %s", aviso)
 
-    log.info("  %s linhas x %s colunas", f"{len(df):,}", len(df.columns))
+    porta2_transformacao(
+        df,
+        caminho.name,
+        linhas_entrada=linhas_lidas,
+        chave=(cfg.get("chaves") or [None])[0],
+    )
 
     df = df.fillna("").astype(str)  # o destino é LONGTEXT
 
@@ -113,22 +152,42 @@ def carregar_arquivo(caminho: Path, chave_pasta: str, cursor) -> int:
     return linhas
 
 
-def varrer() -> int:
-    """Processa todas as pastas. Devolve quantos arquivos falharam."""
+def varrer(pular: set[str] | None = None) -> int:
+    """Processa todas as pastas. Devolve quantos arquivos falharam.
+
+    `pular` recebe nomes de pasta (minúsculo) que outro pipeline cuida — hoje
+    o faturamento, que roda de hora em hora. Sem isso as duas cargas
+    disputariam a mesma tabela.
+    """
+    # `is None` e não `or`: um set vazio é falsy, e quem passa pular=set()
+    # está pedindo pra processar tudo, não pra usar o padrão.
+    if pular is None:
+        pular = PASTAS_DE_OUTRO_PIPELINE
+    pular = {p.lower() for p in pular}
+
     log.info("=" * 60)
     log.info("Iniciando carga...")
     inicio = time.time()
+    inicio_dt = datetime.datetime.now()
 
     if not ENTRADA_VPS.is_dir():
         log.error("Não achei a pasta de entrada: %s", ENTRADA_VPS)
         return 1
 
     total_arquivos = total_linhas = falhas = 0
+    # Para o registro em etl_execucoes: quais tabelas foram tocadas e o que deu
+    # errado. O painel do ETL antigo lê esses dois campos.
+    bases: dict[str, int] = {}
+    mensagens_de_erro: list[str] = []
 
     with conexao() as con:
         cursor = con.cursor()
 
         for pasta in sorted(p for p in ENTRADA_VPS.iterdir() if p.is_dir()):
+            if pasta.name.lower() in pular:
+                log.info("  (outro pipeline) %s/", pasta.name)
+                continue
+
             arquivos = sorted(
                 a for a in pasta.iterdir() if a.suffix.lower() in EXTENSOES
             )
@@ -149,6 +208,8 @@ def varrer() -> int:
 
                     total_arquivos += 1
                     total_linhas += linhas
+                    tabela = nome_tabela(chave)
+                    bases[tabela] = bases.get(tabela, 0) + 1
 
                 except Exception as erro:
                     # Um arquivo ruim não derruba os outros, mas conta como falha.
@@ -156,6 +217,7 @@ def varrer() -> int:
                     falhas += 1
                     log.error("  FALHA em %s: %s", arquivo.name, erro)
                     log.debug("traceback de %s", arquivo.name, exc_info=True)
+                    mensagens_de_erro.append(f"{arquivo.name}: {erro}")
 
         try:
             criar_view_itens_completo(cursor)
@@ -163,6 +225,23 @@ def varrer() -> int:
         except Exception as erro:
             falhas += 1
             log.error("  FALHA ao criar a view ItensCompleto: %s", erro)
+            mensagens_de_erro.append(f"view ItensCompleto: {erro}")
+
+        # Registro por último, com a carga já commitada: se falhar, perde-se o
+        # registro, nunca o dado. Commit próprio pelo mesmo motivo.
+        registrar(
+            cursor,
+            inicio=inicio_dt,
+            falhas=falhas,
+            arquivos=total_arquivos,
+            linhas=total_linhas,
+            bases=bases,
+            erros="\n".join(mensagens_de_erro),
+        )
+        try:
+            con.commit()
+        except Exception as erro:
+            log.warning("  não commitei o registro de execução: %s", erro)
 
         cursor.close()
 
@@ -179,21 +258,8 @@ def varrer() -> int:
     return falhas
 
 
-def configurar_log() -> None:
-    PASTA_LOGS.mkdir(parents=True, exist_ok=True)
-    logging.basicConfig(
-        level=logging.INFO,
-        format="[%(asctime)s] %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-        handlers=[
-            logging.FileHandler(PASTA_LOGS / "upload.log", encoding="utf-8"),
-            logging.StreamHandler(sys.stdout),
-        ],
-    )
-
-
 def main() -> int:
-    configurar_log()
+    configurar_log("upload.log")
 
     # Banco fora do ar, rede ou credencial errada morre aqui, antes de qualquer
     # arquivo. Sem isso vira um traceback de 20 linhas do driver, quando o que

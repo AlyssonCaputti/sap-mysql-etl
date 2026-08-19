@@ -62,13 +62,15 @@ def _parsear_datas(df: pd.DataFrame, coluna: str, formato: str) -> pd.Series:
     """Tenta o formato configurado, depois os fallbacks conhecidos."""
     bruto = df[coluna].astype(str).str.strip()
 
+    # Sem %m/%d/%Y aqui de propósito: ele lê "03/08/2026" como 8 de março e
+    # a linha vai pro mês errado, calada. Se a origem mandar US um dia, prefiro
+    # que aborte a que adivinhe.
     formatos = [formato] if formato else []
     for f in (
         "%Y-%m-%d",
         "%d/%m/%Y",
         "%Y-%m-%d %H:%M:%S",
         "%d/%m/%Y %H:%M:%S",
-        "%m/%d/%Y",
     ):
         if f not in formatos:
             formatos.append(f)
@@ -136,7 +138,13 @@ def date_range(
 
     data_min = datas.min().strftime("%Y-%m-%d")
     data_max = datas.max().strftime("%Y-%m-%d")
-    log.info("    janela do arquivo: %s -> %s", data_min, data_max)
+    meses = sorted(datas.dt.strftime("%Y-%m").unique())
+    log.info(
+        "    janela do arquivo: %s -> %s (%s mês/meses)",
+        data_min,
+        data_max,
+        len(meses),
+    )
 
     if not tabela_existe(cursor, tabela):
         criar_tabela(cursor, tabela, list(df.columns))
@@ -146,24 +154,32 @@ def date_range(
         # de matar a query, e o COALESCE consegue tentar o formato seguinte.
         cursor.execute("SET SESSION sql_mode = ''")
 
-        # Os formatos do STR_TO_DATE vão como parâmetro junto com as datas.
-        # Assim não sobra nenhum '%' literal na query — escapar com '%%' não
-        # funciona neste driver quando a query também tem placeholder.
+        # Apago mês a mês, não o intervalo inteiro: com BETWEEN, um mês sem
+        # linha no arquivo mas dentro do intervalo era apagado e nunca reposto.
+        #
+        # Os formatos vão como parâmetro junto com os meses. Assim não sobra
+        # '%' literal na query — escapar com '%%' não funciona neste driver
+        # quando a query também tem placeholder.
+        marcadores = ", ".join(["%s"] * len(meses))
         cursor.execute(
-            f"DELETE FROM `{tabela}` WHERE DATE(COALESCE("
+            f"DELETE FROM `{tabela}` WHERE DATE_FORMAT(COALESCE("
             f"  STR_TO_DATE(`{coluna_data}`, %s),"
             f"  STR_TO_DATE(`{coluna_data}`, %s),"
             f"  STR_TO_DATE(`{coluna_data}`, %s)"
-            f")) BETWEEN %s AND %s",
+            f"), %s) IN ({marcadores})",
             (
                 "%d/%m/%Y",
                 "%Y-%m-%d",
                 "%Y-%m-%d %H:%i:%s",
-                data_min,
-                data_max,
+                "%Y-%m",
+                *meses,
             ),
         )
-        log.info("    %s linha(s) apagadas na janela", f"{cursor.rowcount:,}")
+        log.info(
+            "    %s linha(s) apagadas em %s",
+            f"{cursor.rowcount:,}",
+            ", ".join(meses),
+        )
 
         cursor.execute(
             "SET SESSION sql_mode = 'STRICT_TRANS_TABLES,NO_ENGINE_SUBSTITUTION'"

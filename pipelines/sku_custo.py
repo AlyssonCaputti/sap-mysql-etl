@@ -1,4 +1,4 @@
-"""Carga da CustoPorDeposito (custo médio e estoque por depósito), a cada 5 min.
+"""Carga da SkuCusto (custo médio e estoque por depósito), a cada 5 min.
 
 Essa base é separada do ETL diário porque a origem regera o arquivo várias
 vezes por dia e o Forecast depende dela. Aqui eu não movo o arquivo pro backup
@@ -12,19 +12,23 @@ quase sempre está igual.
 """
 
 import argparse
-import hashlib
-import json
 import logging
-import sys
 import time
 from datetime import datetime
 from pathlib import Path
 
-from config.settings import ENTRADA_VPS, PASTA_LOGS, RAIZ
+from config.settings import EXTENSOES_DADOS, PASTA_SKU_CUSTO, RAIZ
 from config.tables import CONTRATOS
+from src.io.controle import hash_de, ler_estado, salvar_estado
 from src.io.database import conexao
+from src.io.log import configurar as configurar_log
 from src.io.readers import ler_arquivo
 from src.load.strategies import replace
+from src.quality.checkpoints import (
+    comparar_com_ultima,
+    porta1_recepcao,
+    porta2_transformacao,
+)
 from src.quality.contracts import (
     exigir_nao_vazio,
     normalizar_colunas,
@@ -33,11 +37,12 @@ from src.quality.contracts import (
 
 log = logging.getLogger(__name__)
 
-CHAVE_PASTA = "custo_por_deposito"
-PASTA = ENTRADA_VPS / CHAVE_PASTA
-TABELA = "CustoPorDeposito"
+CHAVE_PASTA = "sku_custo"
+# Direto da rede — ver o comentario em config/settings.py:PASTA_SKU_CUSTO.
+PASTA = PASTA_SKU_CUSTO
+TABELA = "SkuCusto"
 ARQUIVO_ESTADO = RAIZ / ".estado_sku_custo.json"
-EXTENSOES = (".csv", ".xlsx", ".xlsm")
+EXTENSOES = EXTENSOES_DADOS
 
 
 def achar_arquivo() -> Path | None:
@@ -51,32 +56,15 @@ def achar_arquivo() -> Path | None:
     return max(alvos, key=lambda a: a.stat().st_mtime)
 
 
-def hash_de(caminho: Path) -> str:
-    digest = hashlib.sha256()
-    with open(caminho, "rb") as fh:
-        for bloco in iter(lambda: fh.read(1024 * 1024), b""):
-            digest.update(bloco)
-    return digest.hexdigest()
-
-
-def ler_estado() -> dict:
-    try:
-        return json.loads(ARQUIVO_ESTADO.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {}
-
-
-def salvar_estado(estado: dict) -> None:
-    ARQUIVO_ESTADO.write_text(
-        json.dumps(estado, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
-
-
-def carregar(caminho: Path) -> int:
+def carregar(caminho: Path, linhas_anteriores: int | None = None) -> int:
     """Le, valida contra o contrato e substitui a tabela."""
     df, avisos = ler_arquivo(caminho)
     for aviso in avisos:
         log.warning("%s", aviso)
+
+    porta1_recepcao(df, caminho.name, avisos)
+    comparar_com_ultima(len(df), linhas_anteriores, caminho.name)
+    linhas_lidas = len(df)
 
     df = normalizar_colunas(df)
 
@@ -84,6 +72,8 @@ def carregar(caminho: Path) -> int:
     # ficar com o dado de ontem.
     validar_contrato(df, CONTRATOS[CHAVE_PASTA], caminho.name)
     exigir_nao_vazio(df, caminho.name)
+
+    porta2_transformacao(df, caminho.name, linhas_entrada=linhas_lidas)
 
     df = df.fillna("").astype(str)
 
@@ -98,21 +88,8 @@ def carregar(caminho: Path) -> int:
     return gravadas
 
 
-def configurar_log() -> None:
-    PASTA_LOGS.mkdir(parents=True, exist_ok=True)
-    logging.basicConfig(
-        level=logging.INFO,
-        format="[%(asctime)s] %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-        handlers=[
-            logging.FileHandler(PASTA_LOGS / "sku_custo.log", encoding="utf-8"),
-            logging.StreamHandler(sys.stdout),
-        ],
-    )
-
-
 def main(argumentos: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="ETL incremental CustoPorDeposito")
+    parser = argparse.ArgumentParser(description="ETL incremental SkuCusto")
     parser.add_argument(
         "--forcar", action="store_true", help="recarrega mesmo sem mudanca"
     )
@@ -121,14 +98,14 @@ def main(argumentos: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argumentos)
 
-    configurar_log()
+    configurar_log("sku_custo.log")
 
     caminho = achar_arquivo()
     if not caminho:
         log.info("nenhum arquivo na pasta — nada a fazer")
         return 0
 
-    estado = ler_estado()
+    estado = ler_estado(ARQUIVO_ESTADO)
     atual = hash_de(caminho)
     modificado = datetime.fromtimestamp(caminho.stat().st_mtime)
 
@@ -150,7 +127,7 @@ def main(argumentos: list[str] | None = None) -> int:
 
     inicio = time.time()
     try:
-        linhas = carregar(caminho)
+        linhas = carregar(caminho, estado.get("linhas"))
     except Exception as erro:
         # Não gravo o hash, então a próxima rodada tenta de novo sozinha.
         log.error("ERRO ao carregar: %s: %s", type(erro).__name__, erro)
@@ -158,6 +135,7 @@ def main(argumentos: list[str] | None = None) -> int:
         return 1
 
     salvar_estado(
+        ARQUIVO_ESTADO,
         {
             "hash": atual,
             "arquivo": caminho.name,

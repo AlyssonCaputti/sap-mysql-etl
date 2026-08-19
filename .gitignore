@@ -5,8 +5,10 @@
 logs/*
 !logs/.gitkeep
 
-# Estado do ETL incremental
-.estado_sku_custo.json
+# Estado e locks dos ETLs que rodam de tempos em tempos
+.estado_*.json
+.estado_*.json.tmp
+.lock_*
 
 # Cache Python
 __pycache__/
@@ -25,6 +27,9 @@ dados/**
 !dados/**/
 !dados/**/.gitkeep
 !dados/README.md
+
+# Cache do faturamento (gerado, nao versionado)
+dados/faturamento_parquet/
 
 *.csv
 *.xlsx

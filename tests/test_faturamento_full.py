@@ -19,6 +19,7 @@ import sqlite3
 
 import pytest
 
+from config.tables import ILHA_PADRAO, ILHAS
 from pipelines.faturamento_full import (
     _MC_NEGATIVAS,
     _MC_POSITIVAS,
@@ -119,15 +120,27 @@ def test_insert_lista_colunas_e_valores_consistentes():
 
 
 def test_ilha_usa_binary_para_ser_sensivel_a_maiuscula():
-    """Sem BINARY, 'grw-fulano' casaria como GRW e mudaria a carteira."""
+    """Sem BINARY, 'i1-fulano' casaria como I1 e mudaria a carteira."""
     assert "BINARY" in _ilha_de_vendedor()
 
 
 def test_carteira_deriva_da_mesma_expressao_da_ilha():
     """Se as duas divergirem, o dashboard mostra ilha e carteira incoerentes."""
     carteira = _carteira_de_ilha("COALESCE(d.ilha, 'outros')")
-    assert "Key Account" in carteira and "Growth" in carteira
+
+    # Toda ilha da config tem que ter carteira, e as duas leem a mesma coluna.
+    for prefixo, nome in ILHAS.items():
+        assert prefixo in carteira and nome in carteira
     assert "COALESCE(d.ilha, 'outros')" in carteira
+
+
+def test_ilha_cobre_todos_os_prefixos_da_config():
+    """Prefixo novo na config tem que aparecer no SQL sem mexer em codigo."""
+    sql = _ilha_de_vendedor()
+
+    for prefixo in ILHAS:
+        assert f"'{prefixo}'" in sql
+    assert ILHA_PADRAO in sql
 
 
 # ─────────────────────────────────────────────────────────────

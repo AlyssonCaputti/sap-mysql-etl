@@ -6,6 +6,8 @@ banco — é o que deixa testar sem infraestrutura.
 
 import pandas as pd
 
+from config.tables import COLUNA_MARCA_DESTINO, COLUNA_MARCA_ORIGEM, ILHAS
+
 MAPA_COLUNAS = {
     "CardCode": "codigo_do_pn",
     "CardName": "nome_do_pn",
@@ -23,7 +25,7 @@ MAPA_COLUNAS = {
     "CNPJ_CPF": "cnpj_cpf",
     "E_Mail": "e_mail",
     "CreateDate": "data_de_criacao",
-    "U_GP_Protege": "marca_foco",
+    COLUNA_MARCA_ORIGEM: COLUNA_MARCA_DESTINO,
     "validFor": "ativo",
     "U_sourcepn": "origem_do_pn",
     "PrimeiraCompra": "primeira_compra",
@@ -52,13 +54,15 @@ COLUNAS_OPCIONAIS = {"Inadimplente", "DataBoletoMaisAntigoInadimplente"}
 
 COLUNAS_VENDEDOR = ["Vendedor", "Supervisão", "Carteira", "VendedorAtendente"]
 
-MAPA_ILHA = {"Key Account": "KA", "Growth": "GRW", "Sales Account": "SA"}
+# Carteira (como vem na planilha) -> prefixo da ilha. O espelho disso está em
+# config/tables.py:ILHAS, que o faturamento_full usa.
+MAPA_ILHA = {nome: prefixo for prefixo, nome in ILHAS.items()}
 
 
 def realinhar_por_posicao(
     df: pd.DataFrame, colunas_referencia: list[str]
 ) -> pd.DataFrame:
-    """Devolve os nomes técnicos quando a origem vem em português.
+    """Devolve os nomes técnicos quando a origem vem em português (01/07/2026).
 
     Alinho por posição: a exportação em português tem a mesma ordem e a mesma
     quantidade de colunas, só o texto do cabeçalho muda.
@@ -91,7 +95,7 @@ def deduplicar_vendedores(df: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
             .tolist()
         )
         avisos.append(
-            f"{duplicados} vendedor(es) repetido(s) em vendedores.xlsx: {nomes}. "
+            f"{duplicados} vendedor(es) repetido(s) na planilha: {nomes}. "
             f"Fiquei com o primeiro de cada."
         )
         df = df.drop_duplicates(subset="Vendedor", keep="first")

@@ -4,17 +4,17 @@ Roda depois do upload, quando as três fontes já estão no banco. Limpa a tabel
 e reinsere tudo.
 
 A `mc` é calculada aqui, não copiada: a coluna `mc` da origem vem com valor
-errado. A fórmula é receita menos custos e impostos.
+errado (decisão de 25/05/2026). A fórmula é receita menos custos e impostos.
 
-A tabela precisa existir antes — quem cria é a migration 002 do a API de dashboards.
+A tabela precisa existir antes, criada pela migration do projeto que consome.
 """
 
 import logging
-import sys
 import time
 
-from config.settings import PASTA_LOGS
+from config.tables import CARTEIRA_PADRAO, ILHA_PADRAO, ILHAS, MARCA_FOCO
 from src.io.database import conexao
+from src.io.log import configurar as configurar_log
 
 log = logging.getLogger(__name__)
 
@@ -73,26 +73,28 @@ _MES_ANO_SQL = """
 """
 
 
-# A ilha sai do prefixo do vendedor ("GRW-FULANO"). O BINARY deixa o match
-# sensível a maiúscula, então só GRW/SA/KA exatos valem.
+# A ilha sai do prefixo do vendedor ("I1-FULANO"). O BINARY deixa o match
+# sensível a maiúscula, então só os prefixos exatos valem.
 def _ilha_de_vendedor(alias: str = "f") -> str:
+    quando = "\n        ".join(
+        f"WHEN '{prefixo}' THEN '{prefixo}'" for prefixo in ILHAS
+    )
     return f"""
     CASE BINARY SUBSTRING_INDEX({alias}.vendedor, '-', 1)
-        WHEN 'GRW' THEN 'GRW'
-        WHEN 'SA'  THEN 'SA'
-        WHEN 'KA'  THEN 'KA'
-        ELSE 'outros'
+        {quando}
+        ELSE '{ILHA_PADRAO}'
     END
 """
 
 
 def _carteira_de_ilha(expressao: str) -> str:
+    quando = "\n        ".join(
+        f"WHEN '{prefixo}' THEN '{nome}'" for prefixo, nome in ILHAS.items()
+    )
     return f"""
     CASE ({expressao})
-        WHEN 'KA'  THEN 'Key Account'
-        WHEN 'GRW' THEN 'Growth'
-        WHEN 'SA'  THEN 'Sales Account'
-        ELSE 'Outros'
+        {quando}
+        ELSE '{CARTEIRA_PADRAO}'
     END
 """
 
@@ -107,12 +109,12 @@ _EMISSAO_DATE = """
     )
 """
 
-# A ilha do cliente vem da última compra dele da marca marca_foco — a linha de
-# maior emissão, desempatando pelo maior valor_total. Quem nunca comprou
-# marca_foco fica como 'outros'.
+# A ilha do cliente vem da última compra dele da marca foco — a linha de maior
+# emissão, desempatando pelo maior valor_total. Quem nunca comprou a marca
+# fica como 'outros'.
 #
 # Fica verboso porque evito ROW_NUMBER (pra rodar em MySQL 5.x): isolo as
-# linhas marca_foco, acho o par (emissão, valor) máximo de cada cliente e junto
+# linhas da marca, acho o par (emissão, valor) máximo de cada cliente e junto
 # de volta. O MAX no fim garante uma linha por cliente mesmo com empate.
 _ILHA_MARCA_FOCO = f"""
     SELECT
@@ -124,14 +126,14 @@ _ILHA_MARCA_FOCO = f"""
             {_EMISSAO_DATE} AS emissao_dt,
             CAST(REPLACE(NULLIF(TRIM(valor_total),''),',','.') AS DECIMAL(18,4)) AS valor_total_num
         FROM Faturamento
-        WHERE UPPER(TRIM(marca)) = 'MARCA_FOCO'
+        WHERE UPPER(TRIM(marca)) = '{MARCA_FOCO}'
     ) d
     JOIN (
         SELECT cod_cliente, MAX(emissao_dt) AS max_emissao
         FROM (
             SELECT cod_cliente, {_EMISSAO_DATE} AS emissao_dt
             FROM Faturamento
-            WHERE UPPER(TRIM(marca)) = 'MARCA_FOCO'
+            WHERE UPPER(TRIM(marca)) = '{MARCA_FOCO}'
         ) e
         GROUP BY cod_cliente
     ) ult ON ult.cod_cliente = d.cod_cliente AND ult.max_emissao = d.emissao_dt
@@ -143,7 +145,7 @@ _ILHA_MARCA_FOCO = f"""
                 {_EMISSAO_DATE} AS emissao_dt,
                 CAST(REPLACE(NULLIF(TRIM(valor_total),''),',','.') AS DECIMAL(18,4)) AS valor_total_num
             FROM Faturamento
-            WHERE UPPER(TRIM(marca)) = 'MARCA_FOCO'
+            WHERE UPPER(TRIM(marca)) = '{MARCA_FOCO}'
         ) v
         GROUP BY cod_cliente, emissao_dt
     ) vmax ON vmax.cod_cliente = d.cod_cliente
@@ -287,23 +289,8 @@ def garantir_colunas(cursor) -> None:
             log.info("coluna '%s' adicionada a faturamento_full", nome)
 
 
-def configurar_log() -> None:
-    PASTA_LOGS.mkdir(parents=True, exist_ok=True)
-    logging.basicConfig(
-        level=logging.INFO,
-        format="[%(asctime)s] %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-        handlers=[
-            logging.FileHandler(
-                PASTA_LOGS / "faturamento_full.log", encoding="utf-8"
-            ),
-            logging.StreamHandler(sys.stdout),
-        ],
-    )
-
-
 def main() -> int:
-    configurar_log()
+    configurar_log("faturamento_full.log")
     log.info("=" * 60)
     log.info("Materializando faturamento_full...")
     inicio = time.time()
@@ -315,8 +302,8 @@ def main() -> int:
             cursor.execute("SHOW TABLES LIKE 'faturamento_full'")
             if not cursor.fetchone():
                 raise RuntimeError(
-                    "Tabela faturamento_full nao existe. Rode antes: "
-                    "python a API de dashboards/migrations/002_create_faturamento_full.py"
+                    "Tabela faturamento_full nao existe. Rode antes a migration "
+                    "que a cria, no projeto que consome esta tabela."
                 )
 
             garantir_colunas(cursor)

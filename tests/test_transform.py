@@ -11,6 +11,7 @@ Cada teste marcado como CICATRIZ reproduz uma falha real de producao.
 import pandas as pd
 import pytest
 
+from config.tables import ILHAS
 from src.quality.contracts import (
     chave_comparacao,
     exigir_nao_vazio,
@@ -100,7 +101,7 @@ def test_vendedor_duplicado_nao_multiplica_clientes():
         {
             "Vendedor": ["ANA", "ANA", "BRUNO"],
             "Supervisão": ["S1", "S2", "S3"],
-            "Carteira": ["Growth", "Growth", "Key Account"],
+            "Carteira": ["Ilha 1", "Ilha 1", "Ilha 2"],
             "VendedorAtendente": ["X", "Y", "Z"],
         }
     )
@@ -122,7 +123,7 @@ def test_merge_preserva_contagem_de_clientes():
         {
             "Vendedor": ["ANA", "ANA", "BRUNO"],  # duplicado de proposito
             "Supervisão": ["S1", "S2", "S3"],
-            "Carteira": ["Growth", "Growth", "Key Account"],
+            "Carteira": ["Ilha 1", "Ilha 1", "Ilha 2"],
             "VendedorAtendente": ["X", "Y", "Z"],
         }
     )
@@ -140,12 +141,15 @@ def test_merge_preserva_contagem_de_clientes():
 
 
 def test_mapeia_ilha_a_partir_da_carteira():
+    # A carteira e a ilha esperada saem da config, nao de literal aqui.
+    prefixo, carteira = next(iter(ILHAS.items()))
+
     clientes = pd.DataFrame({"CardCode": ["C1"], "NomeVendedor": ["ANA"]})
     vendedores = pd.DataFrame(
         {
             "Vendedor": ["ANA"],
             "Supervisão": ["S1"],
-            "Carteira": ["Key Account"],
+            "Carteira": [carteira],
             "VendedorAtendente": ["X"],
         }
     )
@@ -157,7 +161,7 @@ def test_mapeia_ilha_a_partir_da_carteira():
     finally:
         t_clientes.MAPA_COLUNAS = original
 
-    assert resultado["ilha"].iloc[0] == "KA"
+    assert resultado["ilha"].iloc[0] == prefixo
     assert "supervisor" in resultado.columns
 
 
