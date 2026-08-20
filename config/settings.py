@@ -60,16 +60,27 @@ PASTA_SKU_CUSTO = Path(
     )
 )
 
-# O faturamento le direto da rede porque a origem o regera de hora em hora —
-# copiar pra ca antes so criaria uma versao desatualizada no meio do caminho.
-# As outras entidades sao diarias e continuam em dados/.
-ORIGENS = {
-    "clientes": DADOS / "clientes" / "dataClientesVPS.xlsx",
-    "vendedores": DADOS / "ilhas_vendedores" / "Vendedores.xlsx",
+# O SAP exporta sozinho na raiz da integracao; o que e atualizado na mao fica
+# em dados-att-manualmente.
+MANUAIS = INTEGRACAO / "dados-att-manualmente"
+
+_PADRAO_ORIGENS = {
+    "clientes": INTEGRACAO / "clientes" / "dataClientesVPS.xlsx",
+    "itens": INTEGRACAO / "itens" / "dataItensVPS.csv",
     "faturamento": INTEGRACAO / "Faturamento_RentNFVPS" / "dataRentNFVPS.csv",
-    "itens": DADOS / "itens" / "dataItensVPS.csv",
-    "preco_revenda": DADOS / "preco_revenda" / "preco_revenda.csv",
-    "imagem_url": DADOS / "imagem_url",  # nome do arquivo varia
+    # Na rede a pasta chama "vendedores"; a chave fica como esta porque
+    # config/tables.py casa por ela.
+    "vendedores": MANUAIS / "vendedores" / "Vendedores.xlsx",
+    "preco_revenda": MANUAIS / "preco_revenda" / "preco_revenda.csv",
+    "imagem_url": MANUAIS / "imagem_url",  # nome do arquivo varia
+}
+
+# Tudo le da rede, que e onde a origem publica. As pastas em dados/ continuam
+# servindo de fallback: ETL_ORIGEM_CLIENTES e afins sobrescrevem quando o P:
+# esta fora.
+ORIGENS = {
+    nome: Path(os.getenv(f"ETL_ORIGEM_{nome.upper()}", str(padrao)))
+    for nome, padrao in _PADRAO_ORIGENS.items()
 }
 
 SAIDAS = {

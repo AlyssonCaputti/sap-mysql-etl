@@ -45,6 +45,7 @@ from src.io.controle import (
     salvar_estado,
 )
 from src.io.database import conexao
+from src.io.alerta import falhou, normalizou
 from src.io.log import configurar as configurar_log
 from src.io.parquet import gravar_particionado, ler_meses, ultimos_meses
 from src.io.readers import ler_arquivo
@@ -215,6 +216,11 @@ def main(argumentos: list[str] | None = None) -> int:
 
     if not ORIGEM.exists():
         log.error("não achei a origem: %s", ORIGEM)
+        falhou(
+            "faturamento_horario",
+            f"Não achei a origem: {ORIGEM}",
+            chave="origem_ausente",
+        )
         return 1
 
     # A origem escreve direto na pasta de rede, então pode estar no meio da
@@ -265,6 +271,11 @@ def main(argumentos: list[str] | None = None) -> int:
         # Não gravo o hash: na próxima hora tenta de novo.
         log.error("FALHA: %s: %s", type(erro).__name__, erro)
         log.debug("traceback", exc_info=True)
+        falhou(
+            "faturamento_horario",
+            f"{type(erro).__name__}: {erro}",
+            contexto={"Origem mod": modificado},
+        )
         return 1
 
     salvar_estado(
@@ -284,6 +295,7 @@ def main(argumentos: list[str] | None = None) -> int:
         time.time() - inicio,
     )
     log.info("=" * 60)
+    normalizou("faturamento_horario", contexto={"Linhas": f"{linhas:,}"})
     return 0
 
 

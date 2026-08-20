@@ -21,6 +21,7 @@ from config.settings import EXTENSOES_DADOS, PASTA_SKU_CUSTO, RAIZ
 from config.tables import CONTRATOS
 from src.io.controle import hash_de, ler_estado, salvar_estado
 from src.io.database import conexao
+from src.io.alerta import falhou, normalizou
 from src.io.log import configurar as configurar_log
 from src.io.readers import ler_arquivo
 from src.load.strategies import replace
@@ -132,6 +133,13 @@ def main(argumentos: list[str] | None = None) -> int:
         # Não gravo o hash, então a próxima rodada tenta de novo sozinha.
         log.error("ERRO ao carregar: %s: %s", type(erro).__name__, erro)
         log.debug("traceback", exc_info=True)
+        # Roda a cada 5 min: a janela de silencio do alerta e o que impede
+        # 12 e-mails por hora do mesmo problema.
+        falhou(
+            TABELA,
+            f"{type(erro).__name__}: {erro}",
+            contexto={"Arquivo": caminho.name, "Tabela": TABELA},
+        )
         return 1
 
     salvar_estado(
@@ -151,6 +159,9 @@ def main(argumentos: list[str] | None = None) -> int:
         time.time() - inicio,
         modificado.strftime("%d/%m %H:%M"),
     )
+    # So aqui, e nao no "sem mudanca" la em cima: aquele caminho roda 288x por
+    # dia e nao deve nem tocar no estado do alerta.
+    normalizou(TABELA, contexto={"Linhas": f"{linhas:,}"})
     return 0
 
 

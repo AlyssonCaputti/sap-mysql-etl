@@ -40,3 +40,10 @@ dados/faturamento_parquet/
 
 # NAO ignorar (o original tinha "*.txt", que engolia estes dois):
 !requirements.txt
+
+# Backup das Tarefas Agendadas antes da virada
+.backup_tarefas/
+
+# Estado do anti-spam do alerta (local da maquina)
+.alertas_enviados.json
+.alertas_enviados.json.tmp

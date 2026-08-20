@@ -44,6 +44,7 @@ MAPA_COLUNAS = {
     "U_dtUltimaAnaliseCredito": "data_de_analise_credito",
     "Inadimplente": "inadimplente",
     "DataBoletoMaisAntigoInadimplente": "dt_boleto_inadimplente",
+    "U_GL_CNAE": "CNAE",
 }
 
 # Sumiram da exportacao de origem sem aviso (2026-07-23). Sao opcionais: se nao
@@ -63,9 +64,7 @@ def realinhar_por_posicao(
     Alinho por posição: a exportação em português tem a mesma ordem e a mesma
     quantidade de colunas, só o texto do cabeçalho muda.
     """
-    referencia = [
-        c for c in colunas_referencia if not str(c).startswith("Unnamed:")
-    ]
+    referencia = [c for c in colunas_referencia if not str(c).startswith("Unnamed:")]
     if len(referencia) != len(df.columns):
         raise ValueError(
             f"Não deu pra realinhar: a planilha tem {len(df.columns)} colunas e "
@@ -86,9 +85,7 @@ def deduplicar_vendedores(df: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
     duplicados = int(df["Vendedor"].duplicated().sum())
     if duplicados:
         nomes = (
-            df.loc[df["Vendedor"].duplicated(keep=False), "Vendedor"]
-            .unique()
-            .tolist()
+            df.loc[df["Vendedor"].duplicated(keep=False), "Vendedor"].unique().tolist()
         )
         avisos.append(
             f"{duplicados} vendedor(es) repetido(s) em Vendedores.xlsx: {nomes}. "

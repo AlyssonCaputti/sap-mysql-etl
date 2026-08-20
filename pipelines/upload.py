@@ -13,6 +13,7 @@ from pathlib import Path
 
 from config.settings import BACKUP, ENTRADA_VPS, EXTENSOES_DADOS
 from config.tables import CONTRATOS, ESTRATEGIA_PADRAO, ESTRATEGIAS
+from src.io.alerta import base_falhou, base_ok, falhou, normalizou
 from src.io.database import conexao, validar_identificador
 from src.io.execucoes import registrar
 from src.io.log import configurar as configurar_log
@@ -40,6 +41,16 @@ PASTAS_DE_OUTRO_PIPELINE = {"faturamento"}
 # atualizadas, não somadas — comparar ali daria alarme falso.
 _CONFERE_CONTAGEM = {"replace", "truncate"}
 
+# Detalhe da última varredura, só para o alerta por e-mail montar o corpo.
+# Preenchido no fim de varrer(). Fica com valor neutro aqui porque o main()
+# lê isso mesmo quando varrer() morre antes de chegar ao fim.
+ULTIMO_RESUMO: dict = {
+    "erros": "",
+    "arquivos": 0,
+    "linhas": 0,
+    "tabelas": "(nenhuma)",
+}
+
 
 # Nomes que já existem no banco com a grafia "errada" e ficam como estão.
 #
@@ -51,7 +62,17 @@ _CONFERE_CONTAGEM = {"replace", "truncate"}
 #
 # Decisão de 18/08/2026: manter o nome como está. Para renomear algum dia, é
 # preciso mudar o banco e os consumidores juntos — e então a entrada sai daqui.
-NOMES_FIXOS = {"tabela-preço-promocao": "TabelaPreOPromocao"}
+#
+# As tres de garantia ja existem em snake_case, criadas por outro processo, e
+# tem dashboard lendo delas. Sem o mapeamento aqui o nome_tabela() geraria
+# `ChamadosGarantia` e afins — tabela nova, vazia pros consumidores, enquanto a
+# antiga congelava.
+NOMES_FIXOS = {
+    "tabela-preço-promocao": "TabelaPreOPromocao",
+    "chamados_garantia": "chamados_garantia",
+    "csat_garantia": "csat_garantia",
+    "fabrica_garantia": "fabrica_garantia",
+}
 
 
 def nome_tabela(nome_pasta: str) -> str:
@@ -207,11 +228,16 @@ def varrer(pular: set[str] | None = None) -> int:
                     total_linhas += linhas
                     tabela = nome_tabela(chave)
                     bases[tabela] = bases.get(tabela, 0) + 1
+                    base_ok(tabela, linhas)
 
                 except Exception as erro:
                     # Um arquivo ruim não derruba os outros, mas conta como falha.
                     con.rollback()
                     falhas += 1
+                    # Aviso por base, com o nome da tabela e há quanto tempo
+                    # ela está parada. O alerta do pipeline lá embaixo dá o
+                    # panorama; este diz onde mexer.
+                    base_falhou(nome_tabela(chave), str(erro), pipeline="upload")
                     log.error("  FALHA em %s: %s", arquivo.name, erro)
                     log.debug("traceback de %s", arquivo.name, exc_info=True)
                     mensagens_de_erro.append(f"{arquivo.name}: {erro}")
@@ -252,6 +278,17 @@ def varrer(pular: set[str] | None = None) -> int:
         time.time() - inicio,
     )
     log.info("=" * 60)
+
+    # Guardo o detalhe pro alerta por e-mail conseguir dizer QUAL tabela
+    # quebrou. Não mudo o retorno de varrer(): nove testes esperam um int, e
+    # alterar a assinatura por causa de observabilidade não paga o risco.
+    global ULTIMO_RESUMO
+    ULTIMO_RESUMO = {
+        "erros": "\n".join(mensagens_de_erro),
+        "arquivos": total_arquivos,
+        "linhas": total_linhas,
+        "tabelas": ", ".join(sorted(bases)) or "(nenhuma)",
+    }
     return falhas
 
 
@@ -266,12 +303,40 @@ def main() -> int:
     except Exception as erro:
         log.error("ERRO DE INFRAESTRUTURA — nenhum arquivo processado: %s", erro)
         log.debug("traceback", exc_info=True)
+        # Infra fora do ar não passa por varrer(), então o alerta sai daqui.
+        # Chave fixa: o host oscilando não deve gerar um e-mail por variação
+        # da mensagem do driver.
+        falhou(
+            "upload",
+            f"ERRO DE INFRAESTRUTURA — nenhum arquivo processado.\n\n{erro}",
+            chave="infraestrutura",
+        )
         return 1
 
     # Exit code != 0 quando algo falhou: é assim que o .ps1 percebe o problema.
     if falhas:
         log.error("%s arquivo(s) falharam.", falhas)
+        resumo = ULTIMO_RESUMO
+
+        # Uma base só quebrada já foi avisada por base_falhou(), com o nome da
+        # tabela e há quanto tempo parou. Repetir aqui seriam dois e-mails
+        # dizendo o mesmo. O resumo do pipeline só vale a partir de duas, onde
+        # o panorama ("3 de 5 falharam") diz algo que o aviso isolado não diz.
+        if falhas > 1:
+            falhou(
+                "upload",
+                resumo["erros"] or f"{falhas} arquivo(s) falharam.",
+                contexto={
+                    "Falhas": falhas,
+                    "Arquivos": resumo["arquivos"],
+                    "Linhas": f"{resumo['linhas']:,}",
+                    "Tabelas": resumo["tabelas"],
+                },
+            )
         return 1
+
+    # Rodou limpo: se havia falha pendente, avisa que normalizou.
+    normalizou("upload", contexto={"Arquivos": ULTIMO_RESUMO["arquivos"]})
     return 0
 
 

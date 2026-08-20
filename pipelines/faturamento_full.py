@@ -13,6 +13,7 @@ import logging
 import time
 
 from src.io.database import conexao
+from src.io.alerta import falhou, normalizou
 from src.io.log import configurar as configurar_log
 
 log = logging.getLogger(__name__)
@@ -320,10 +321,12 @@ def main() -> int:
     except Exception as erro:
         log.error("FALHA: %s", erro)
         log.debug("traceback", exc_info=True)
+        falhou("faturamento_full", f"{type(erro).__name__}: {erro}")
         return 1
 
     log.info("OK — concluido em %.1fs", time.time() - inicio)
     log.info("=" * 60)
+    normalizou("faturamento_full")
     return 0
 
 

@@ -28,7 +28,16 @@ ESTRATEGIAS = {
     # Cadastros completos, sem histórico pra preservar.
     "itens": {"estrategia": "replace"},
     "sku_custo_cd_giba": {"estrategia": "replace"},
+    # truncate e não replace: a tabela tem schema ajustado à mão e o replace
+    # recria do zero. Na rede a pasta chama "vendedores"; a entrada antiga fica
+    # porque a pasta local ainda usa o nome comprido.
     "vendedores ilha growth": {"estrategia": "truncate"},
+    "vendedores": {"estrategia": "truncate"},
+    "imagem_url": {"estrategia": "replace"},
+    # O arquivo da rede e a base completa; replace faz a tabela espelhar ele.
+    "chamados_garantia": {"estrategia": "replace"},
+    "csat_garantia": {"estrategia": "replace"},
+    "fabrica_garantia": {"estrategia": "replace"},
 }
 
 # Pasta sem entrada acima cai aqui — é de propósito, pasta nova funciona sem
