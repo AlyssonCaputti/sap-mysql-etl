@@ -1,11 +1,10 @@
 """Testa o alerta por e-mail de ponta a ponta.
 
-    python testar_alerta.py            # diagnostica e manda um e-mail real
-    python testar_alerta.py --so-checar  # so diagnostica, nao envia
+    python testar_alerta.py              # diagnostica e manda um e-mail real
+    python testar_alerta.py --so-checar  # so diagnostica
 
-Existe porque o erro de SMTP costuma ser mudo: a senha esta errada, o tenant
-bloqueou, a porta e outra -- e o pipeline so registra "nao enviei o alerta".
-Aqui o erro aparece traduzido, com o que fazer em cada caso.
+O erro de SMTP costuma ser mudo -- o pipeline so registra "nao enviei o
+alerta". Aqui traduzo o codigo do servidor no que fazer.
 """
 
 import smtplib

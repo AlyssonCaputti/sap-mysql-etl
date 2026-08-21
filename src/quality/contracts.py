@@ -114,3 +114,97 @@ def resolver_renomeacao(
             renomeacao[origem] = destino
 
     return renomeacao, ausentes
+
+
+# Formatos que já vi nas origens. A ordem importa: BR antes de US, senão
+# "03/08/2026" viraria 8 de março calado.
+_FORMATOS_DATA = ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d", "%d/%m/%Y %H:%M:%S", "%d/%m/%Y")
+
+
+def _para_data(serie: pd.Series, com_hora: bool) -> pd.Series:
+    """Converte pra datetime tentando os formatos conhecidos.
+
+    Sem dayfirst automático: prefiro NULL a data adivinhada no mês errado.
+    """
+    bruto = serie.astype(str).str.strip().replace({"": None, "nan": None, "NaT": None})
+    resultado = pd.Series(pd.NaT, index=serie.index, dtype="datetime64[ns]")
+
+    for formato in _FORMATOS_DATA:
+        faltando = resultado.isna() & bruto.notna()
+        if not faltando.any():
+            break
+        resultado.loc[faltando] = pd.to_datetime(
+            bruto[faltando], format=formato, errors="coerce"
+        )
+
+    return resultado if com_hora else resultado.dt.normalize()
+
+
+def _para_numero(serie: pd.Series) -> pd.Series:
+    """Converte pra número aceitando o formato BR (1.234,56)."""
+    bruto = serie.astype(str).str.strip()
+    # Só troco separador quando a vírgula é decimal; "1,234" com ponto ausente
+    # é ambíguo, então trato o padrão BR completo primeiro.
+    br = bruto.str.match(r"^-?\d{1,3}(\.\d{3})+(,\d+)?$")
+    bruto = bruto.mask(br, bruto.str.replace(".", "", regex=False))
+    bruto = bruto.str.replace(",", ".", regex=False)
+    bruto = bruto.replace({"": None, "nan": None, "None": None})
+    return pd.to_numeric(bruto, errors="coerce")
+
+
+def converter_tipos(
+    df: pd.DataFrame, tipos: dict[str, str] | None
+) -> tuple[pd.DataFrame, list[str]]:
+    """Aplica os tipos declarados e devolve avisos do que não converteu.
+
+    O que não tem tipo declarado vira string, como sempre — o destino é
+    LONGTEXT. Só as colunas tipadas saem desse caminho.
+
+    Valor que não converte fica NULL e entra no aviso. Não abortar aqui é
+    decisão: as portas de qualidade já barraram arquivo vazio ou fora de
+    contrato, e perder uma célula ilegível é melhor que perder a carga.
+    """
+    tipos = tipos or {}
+    avisos: list[str] = []
+    saida = df.copy()
+
+    for coluna, tipo in tipos.items():
+        if coluna not in saida.columns:
+            continue
+
+        antes = saida[coluna].astype(str).str.strip().replace({"": None, "nan": None})
+        preenchidas = int(antes.notna().sum())
+
+        if tipo in ("data", "datahora"):
+            convertido = _para_data(saida[coluna], com_hora=(tipo == "datahora"))
+        elif tipo in ("dinheiro", "inteiro", "decimal"):
+            convertido = _para_numero(saida[coluna])
+            if tipo == "inteiro":
+                convertido = convertido.round().astype("Int64")
+        else:
+            # texto/codigo: só limpo e deixo o MySQL truncar se precisar
+            saida[coluna] = saida[coluna].astype(str).str.strip().replace(
+                {"": None, "nan": None}
+            )
+            continue
+
+        perdidas = int((convertido.isna() & antes.notna()).sum())
+        if perdidas:
+            exemplos = (
+                saida.loc[convertido.isna() & antes.notna(), coluna]
+                .astype(str)
+                .unique()[:3]
+                .tolist()
+            )
+            avisos.append(
+                f"{coluna}: {perdidas} de {preenchidas} valor(es) não "
+                f"converteram pra {tipo} e ficaram NULL. Ex.: {exemplos}"
+            )
+        saida[coluna] = convertido
+
+    # O resto segue string, que é o que o LONGTEXT espera.
+    restantes = [c for c in saida.columns if c not in tipos]
+    if restantes:
+        saida[restantes] = saida[restantes].fillna("").astype(str)
+
+    return saida, avisos

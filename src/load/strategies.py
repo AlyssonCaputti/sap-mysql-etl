@@ -25,7 +25,13 @@ def _progresso(inseridas: int, total: int) -> None:
         log.info("    %s/%s linhas...", f"{inseridas:,}", f"{total:,}")
 
 
-def replace(cursor, tabela: str, df: pd.DataFrame) -> int:
+def replace(
+    cursor,
+    tabela: str,
+    df: pd.DataFrame,
+    tipos: dict[str, str] | None = None,
+    indices: list[list[str]] | None = None,
+) -> int:
     """Troca o conteúdo inteiro da tabela.
 
     Monto numa tabela temporária e só troco no fim. Se o CREATE ou o INSERT
@@ -37,7 +43,7 @@ def replace(cursor, tabela: str, df: pd.DataFrame) -> int:
     validar_identificador(nova)
 
     cursor.execute(f"DROP TABLE IF EXISTS `{nova}`")
-    criar_tabela(cursor, nova, list(df.columns))
+    criar_tabela(cursor, nova, list(df.columns), tipos, indices)
     total = inserir_em_lote(cursor, nova, df, _progresso)
 
     cursor.execute(f"DROP TABLE IF EXISTS `{tabela}`")
@@ -46,14 +52,20 @@ def replace(cursor, tabela: str, df: pd.DataFrame) -> int:
     return total
 
 
-def truncate(cursor, tabela: str, df: pd.DataFrame) -> int:
+def truncate(
+    cursor,
+    tabela: str,
+    df: pd.DataFrame,
+    tipos: dict[str, str] | None = None,
+    indices: list[list[str]] | None = None,
+) -> int:
     """TRUNCATE (mantem schema) + insert completo."""
     validar_identificador(tabela)
     if tabela_existe(cursor, tabela):
         cursor.execute(f"TRUNCATE TABLE `{tabela}`")
         log.info("    tabela `%s` truncada", tabela)
     else:
-        criar_tabela(cursor, tabela, list(df.columns))
+        criar_tabela(cursor, tabela, list(df.columns), tipos, indices)
         log.info("    tabela `%s` criada", tabela)
     return inserir_em_lote(cursor, tabela, df, _progresso)
 
@@ -104,6 +116,8 @@ def date_range(
     df: pd.DataFrame,
     coluna_data: str,
     formato_data: str = "%Y-%m-%d",
+    tipos: dict[str, str] | None = None,
+    indices: list[list[str]] | None = None,
 ) -> int:
     """Apaga so a janela de datas do arquivo e reinsere."""
     validar_identificador(tabela)
@@ -147,7 +161,7 @@ def date_range(
     )
 
     if not tabela_existe(cursor, tabela):
-        criar_tabela(cursor, tabela, list(df.columns))
+        criar_tabela(cursor, tabela, list(df.columns), tipos, indices)
         log.info("    tabela `%s` criada (primeira carga)", tabela)
     else:
         # Com sql_mode vazio o STR_TO_DATE devolve NULL numa data ruim em vez
@@ -243,10 +257,20 @@ def upsert(cursor, tabela: str, df: pd.DataFrame, chaves: list[str]) -> int:
 
 
 EXECUTORES = {
-    "replace": lambda cur, tab, df, cfg: replace(cur, tab, df),
-    "truncate": lambda cur, tab, df, cfg: truncate(cur, tab, df),
+    "replace": lambda cur, tab, df, cfg: replace(
+        cur, tab, df, cfg.get("tipos"), cfg.get("indices")
+    ),
+    "truncate": lambda cur, tab, df, cfg: truncate(
+        cur, tab, df, cfg.get("tipos"), cfg.get("indices")
+    ),
     "date_range": lambda cur, tab, df, cfg: date_range(
-        cur, tab, df, cfg["coluna_data"], cfg.get("formato_data", "%Y-%m-%d")
+        cur,
+        tab,
+        df,
+        cfg["coluna_data"],
+        cfg.get("formato_data", "%Y-%m-%d"),
+        cfg.get("tipos"),
+        cfg.get("indices"),
     ),
     "upsert": lambda cur, tab, df, cfg: upsert(cur, tab, df, cfg["chaves"]),
 }

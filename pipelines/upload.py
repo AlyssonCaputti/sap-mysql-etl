@@ -12,7 +12,14 @@ import unicodedata
 from pathlib import Path
 
 from config.settings import BACKUP, ENTRADA_VPS, EXTENSOES_DADOS
-from config.tables import CONTRATOS, ESTRATEGIA_PADRAO, ESTRATEGIAS
+from config.tables import (
+    CONTRATOS,
+    PASTA_MANUAL_PARA_TABELA,
+    ESTRATEGIA_PADRAO,
+    ESTRATEGIAS,
+    INDICES,
+    TIPOS,
+)
 from src.io.alerta import base_falhou, base_ok, falhou, normalizou
 from src.io.database import conexao, validar_identificador
 from src.io.execucoes import registrar
@@ -22,6 +29,7 @@ from src.load.strategies import executar
 from src.load.views import criar_view_itens_completo
 from src.quality.checkpoints import porta1_recepcao, porta2_transformacao
 from src.quality.contracts import (
+    converter_tipos,
     exigir_nao_vazio,
     normalizar_colunas,
     validar_contrato,
@@ -41,9 +49,8 @@ PASTAS_DE_OUTRO_PIPELINE = {"faturamento"}
 # atualizadas, não somadas — comparar ali daria alarme falso.
 _CONFERE_CONTAGEM = {"replace", "truncate"}
 
-# Detalhe da última varredura, só para o alerta por e-mail montar o corpo.
-# Preenchido no fim de varrer(). Fica com valor neutro aqui porque o main()
-# lê isso mesmo quando varrer() morre antes de chegar ao fim.
+# Detalhe da última varredura, para o alerta montar o corpo. Começa neutro
+# porque o main() lê isso mesmo se varrer() morrer antes do fim.
 ULTIMO_RESUMO: dict = {
     "erros": "",
     "arquivos": 0,
@@ -63,15 +70,13 @@ ULTIMO_RESUMO: dict = {
 # Decisão de 18/08/2026: manter o nome como está. Para renomear algum dia, é
 # preciso mudar o banco e os consumidores juntos — e então a entrada sai daqui.
 #
-# As tres de garantia ja existem em snake_case, criadas por outro processo, e
-# tem dashboard lendo delas. Sem o mapeamento aqui o nome_tabela() geraria
-# `ChamadosGarantia` e afins — tabela nova, vazia pros consumidores, enquanto a
-# antiga congelava.
+# As de garantia já existem em snake_case e têm dashboard lendo delas. Mapeio
+# aqui porque senão sairia `ChamadosGarantia`, tabela nova e vazia.
 NOMES_FIXOS = {
     "tabela-preço-promocao": "TabelaPreOPromocao",
-    "chamados_garantia": "chamados_garantia",
-    "csat_garantia": "csat_garantia",
-    "fabrica_garantia": "fabrica_garantia",
+    # As manuais vêm do mesmo mapa que o preparar usa, pra não haver duas
+    # verdades sobre onde cada pasta grava.
+    **{p.lower(): t for p, t in PASTA_MANUAL_PARA_TABELA.items()},
 }
 
 
@@ -133,8 +138,14 @@ def carregar_arquivo(caminho: Path, chave_pasta: str, cursor) -> int:
     Nunca devolvo 0 calado — quem chama precisa saber a diferença entre
     "carregou zero linha" e "deu erro".
     """
-    cfg = ESTRATEGIAS.get(chave_pasta, {})
+    # Leio ESTRATEGIAS do módulo pra continuar valendo o monkeypatch dos
+    # testes; tipos e índices vêm do config direto.
+    cfg = dict(ESTRATEGIAS.get(chave_pasta, {}))
     estrategia = cfg.get("estrategia", ESTRATEGIA_PADRAO)
+    if chave_pasta in TIPOS:
+        cfg["tipos"] = TIPOS[chave_pasta]
+    if chave_pasta in INDICES:
+        cfg["indices"] = INDICES[chave_pasta]
     tabela = nome_tabela(chave_pasta)
 
     log.info("%s -> `%s` [%s]", caminho.name, tabela, estrategia.upper())
@@ -162,7 +173,10 @@ def carregar_arquivo(caminho: Path, chave_pasta: str, cursor) -> int:
         chave=(cfg.get("chaves") or [None])[0],
     )
 
-    df = df.fillna("").astype(str)  # o destino é LONGTEXT
+    # Converte só o que tem tipo declarado; o resto vira string pro LONGTEXT.
+    df, avisos_tipo = converter_tipos(df, cfg.get("tipos"))
+    for aviso in avisos_tipo:
+        log.warning("  TIPO: %s", aviso)
 
     linhas = executar(cursor, tabela, df, {**cfg, "estrategia": estrategia})
     conferir_carga(cursor, tabela, linhas, estrategia)
@@ -234,9 +248,7 @@ def varrer(pular: set[str] | None = None) -> int:
                     # Um arquivo ruim não derruba os outros, mas conta como falha.
                     con.rollback()
                     falhas += 1
-                    # Aviso por base, com o nome da tabela e há quanto tempo
-                    # ela está parada. O alerta do pipeline lá embaixo dá o
-                    # panorama; este diz onde mexer.
+                    # Este aviso diz onde mexer; o do pipeline dá o panorama.
                     base_falhou(nome_tabela(chave), str(erro), pipeline="upload")
                     log.error("  FALHA em %s: %s", arquivo.name, erro)
                     log.debug("traceback de %s", arquivo.name, exc_info=True)
@@ -318,10 +330,8 @@ def main() -> int:
         log.error("%s arquivo(s) falharam.", falhas)
         resumo = ULTIMO_RESUMO
 
-        # Uma base só quebrada já foi avisada por base_falhou(), com o nome da
-        # tabela e há quanto tempo parou. Repetir aqui seriam dois e-mails
-        # dizendo o mesmo. O resumo do pipeline só vale a partir de duas, onde
-        # o panorama ("3 de 5 falharam") diz algo que o aviso isolado não diz.
+        # Uma base só já foi avisada por base_falhou(). Só mando o resumo a
+        # partir de duas, onde o panorama diz algo que o aviso isolado não diz.
         if falhas > 1:
             falhou(
                 "upload",

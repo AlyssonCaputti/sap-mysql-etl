@@ -60,24 +60,23 @@ PASTA_SKU_CUSTO = Path(
     )
 )
 
-# O SAP exporta sozinho na raiz da integracao; o que e atualizado na mao fica
-# em dados-att-manualmente.
+# O SAP exporta na raiz da integração; o que é atualizado na mão fica em
+# dados-att-manualmente.
 MANUAIS = INTEGRACAO / "dados-att-manualmente"
 
 _PADRAO_ORIGENS = {
     "clientes": INTEGRACAO / "clientes" / "dataClientesVPS.xlsx",
     "itens": INTEGRACAO / "itens" / "dataItensVPS.csv",
     "faturamento": INTEGRACAO / "Faturamento_RentNFVPS" / "dataRentNFVPS.csv",
-    # Na rede a pasta chama "vendedores"; a chave fica como esta porque
+    # Na rede a pasta chama "vendedores"; mantenho a chave porque
     # config/tables.py casa por ela.
     "vendedores": MANUAIS / "vendedores" / "Vendedores.xlsx",
     "preco_revenda": MANUAIS / "preco_revenda" / "preco_revenda.csv",
     "imagem_url": MANUAIS / "imagem_url",  # nome do arquivo varia
 }
 
-# Tudo le da rede, que e onde a origem publica. As pastas em dados/ continuam
-# servindo de fallback: ETL_ORIGEM_CLIENTES e afins sobrescrevem quando o P:
-# esta fora.
+# Leio tudo da rede, onde a origem publica. As pastas em dados/ ficam como
+# fallback: ETL_ORIGEM_* sobrescreve quando o P: está fora.
 ORIGENS = {
     nome: Path(os.getenv(f"ETL_ORIGEM_{nome.upper()}", str(padrao)))
     for nome, padrao in _PADRAO_ORIGENS.items()

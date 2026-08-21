@@ -18,7 +18,7 @@ from datetime import datetime
 from pathlib import Path
 
 from config.settings import EXTENSOES_DADOS, PASTA_SKU_CUSTO, RAIZ
-from config.tables import CONTRATOS
+from config.tables import CONTRATOS, INDICES, TIPOS
 from src.io.controle import hash_de, ler_estado, salvar_estado
 from src.io.database import conexao
 from src.io.alerta import falhou, normalizou
@@ -31,6 +31,7 @@ from src.quality.checkpoints import (
     porta2_transformacao,
 )
 from src.quality.contracts import (
+    converter_tipos,
     exigir_nao_vazio,
     normalizar_colunas,
     validar_contrato,
@@ -76,11 +77,14 @@ def carregar(caminho: Path, linhas_anteriores: int | None = None) -> int:
 
     porta2_transformacao(df, caminho.name, linhas_entrada=linhas_lidas)
 
-    df = df.fillna("").astype(str)
+    # Converte só o que tem tipo declarado; o resto vira string.
+    df, avisos_tipo = converter_tipos(df, TIPOS.get(CHAVE_PASTA))
+    for aviso in avisos_tipo:
+        log.warning("  TIPO: %s", aviso)
 
     with conexao() as con:
         cursor = con.cursor()
-        replace(cursor, TABELA, df)
+        replace(cursor, TABELA, df, TIPOS.get(CHAVE_PASTA), INDICES.get(CHAVE_PASTA))
         con.commit()
         cursor.execute(f"SELECT COUNT(*) FROM `{TABELA}`")
         gravadas = cursor.fetchone()[0]

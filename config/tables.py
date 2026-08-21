@@ -28,16 +28,27 @@ ESTRATEGIAS = {
     # Cadastros completos, sem histórico pra preservar.
     "itens": {"estrategia": "replace"},
     "sku_custo_cd_giba": {"estrategia": "replace"},
-    # truncate e não replace: a tabela tem schema ajustado à mão e o replace
-    # recria do zero. Na rede a pasta chama "vendedores"; a entrada antiga fica
-    # porque a pasta local ainda usa o nome comprido.
+    # truncate porque o schema foi ajustado à mão e o replace recria do zero.
+    # Duas chaves: a pasta local tem nome comprido, a da rede é só "vendedores".
     "vendedores ilha growth": {"estrategia": "truncate"},
     "vendedores": {"estrategia": "truncate"},
     "imagem_url": {"estrategia": "replace"},
-    # O arquivo da rede e a base completa; replace faz a tabela espelhar ele.
+    # O arquivo da rede é a base completa, então espelho ele.
     "chamados_garantia": {"estrategia": "replace"},
     "csat_garantia": {"estrategia": "replace"},
     "fabrica_garantia": {"estrategia": "replace"},
+    # As de baixo vieram das pastas de atualizacao manual. replace faz a tabela
+    # espelhar o arquivo, que é a base completa em todas elas.
+    "alcance": {"estrategia": "replace"},
+    "custo_geral_marketing": {"estrategia": "replace"},
+    "custo_marketing": {"estrategia": "replace"},
+    "custo_no_detalhe": {"estrategia": "replace"},
+    "leads": {"estrategia": "replace"},
+    "lista_promocional_julho": {"estrategia": "replace"},
+    "preco_revenda": {"estrategia": "replace"},
+    # truncate aqui: a sql_fator_uf tem `id` bigint auto_increment como chave,
+    # e o replace dropa a tabela e recriaria tudo LONGTEXT sem a chave.
+    "sql_fator_uf": {"estrategia": "truncate"},
 }
 
 # Pasta sem entrada acima cai aqui — é de propósito, pasta nova funciona sem
@@ -68,3 +79,81 @@ CONTRATOS = {
         "opcionais": set(),
     },
 }
+
+
+# ── Bases de atualizacao manual ──────────────────────────────
+# Pastas em dados-att-manualmente que o preparar_manuais() copia pro para_vps.
+# A chave é o nome da pasta na rede; o valor, a tabela que JÁ existe no banco.
+#
+# Declaro o destino explicitamente em vez de deixar o nome_tabela() adivinhar:
+# ele geraria `Leads` e `Alcance`, tabelas novas ao lado das que os dashboards
+# já leem. Pasta que não está aqui não sobe — de propósito.
+PASTA_MANUAL_PARA_TABELA = {
+    "alcance": "alcance",
+    "chamados_garantia": "chamados_garantia",
+    "csat_garantia": "csat_garantia",
+    "custo_geral_marketing": "custo_geral_marketing",
+    "custo_marketing": "custo_marketing",
+    "custo_no_detalhe": "custo_no_detalhe",
+    "fabrica_garantia": "fabrica_garantia",
+    "imagem_url": "ImagemUrl",
+    "leads": "leads",
+    "lista_promocional_julho": "ListaPromocionalJulho",
+    "preco_revenda": "calculo_preco_revenda",
+    "sql_fator_uf": "sql_fator_uf",
+    "vendedores": "Vendedores",
+}
+
+
+# ── Tipos e indices ──────────────────────────────────────────
+# Coluna sem tipo aqui continua LONGTEXT. Declaro por tabela pra poder migrar
+# uma por vez em vez de arriscar as 13 de uma vez.
+#
+# Vocabulario disponivel em src/io/database.py:_TIPOS_SQL — declaro apelido
+# ("data", "dinheiro"), nunca SQL cru.
+#
+# Todo indice exige tipo declarado na coluna: LONGTEXT nao indexa sem prefixo,
+# e o criar_tabela levanta se eu esquecer.
+TIPOS = {
+    "faturamento": {
+        "emissao": "datahora",
+        "cod_cliente": "codigo",
+        "cod_item": "codigo",
+        "valor_total": "dinheiro",
+    },
+    "clientes": {
+        "codigo_do_pn": "codigo",
+        "cnpj_cpf": "codigo",
+        "estado": "texto_curto",
+    },
+    "sku_custo_cd_giba": {
+        "sku": "codigo",
+        "codigo_deposito": "texto_curto",
+        "custo_medio": "dinheiro",
+        "em_estoque": "decimal",
+        "pedido": "decimal",
+    },
+}
+
+# Um indice por padrao de consulta, nao um por coluna: indice a mais custa
+# escrita e espaco em toda carga.
+INDICES = {
+    "faturamento": [["emissao"], ["cod_cliente"], ["cod_item"]],
+    "clientes": [["codigo_do_pn"]],
+    "sku_custo_cd_giba": [["sku"], ["codigo_deposito"]],
+}
+
+
+def config_da_pasta(chave: str) -> dict:
+    """Junta estrategia, contrato, tipos e indices de uma pasta num dict.
+
+    Existe pra quem carrega nao precisar consultar quatro dicionarios e
+    lembrar de todos.
+    """
+    cfg = dict(ESTRATEGIAS.get(chave, {}))
+    cfg.setdefault("estrategia", ESTRATEGIA_PADRAO)
+    if chave in TIPOS:
+        cfg["tipos"] = TIPOS[chave]
+    if chave in INDICES:
+        cfg["indices"] = INDICES[chave]
+    return cfg

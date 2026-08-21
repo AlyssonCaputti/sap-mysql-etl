@@ -1,18 +1,12 @@
 """Aviso por e-mail quando um pipeline falha.
 
-Existe porque a falha era invisivel: o log registrava, o exit code sinalizava,
-e ninguem olhava. O comentario no topo do rodar_etl.ps1 ja dizia isso -- "a
-falha passa dias sem ninguem perceber". Este modulo e o degrau que faltava.
+Antes disso a falha era invisivel: o log registrava e ninguem olhava.
 
-**Regra de ouro, a mesma de execucoes.py: falhar aqui nunca derruba a carga.**
-Aviso e observacao, nao parte do trabalho. SMTP fora do ar, senha vencida ou
-rede caida logam um warning e seguem. Um ETL que carregou nao pode ser marcado
-como quebrado porque o servidor de e-mail estava indisponivel.
+Regra de ouro, a mesma de execucoes.py: **falhar aqui nunca derruba a carga**.
+SMTP fora do ar loga warning e segue.
 
-Anti-spam: o sku_custo roda a cada 5 min. Sem janela de silencio, um erro
-persistente geraria 12 e-mails por hora e viraria ruido -- e alerta que vira
-ruido e alerta que ninguem le. Pelo mesmo motivo o sku_custo ja sai calado do
-log quando nao ha mudanca (ver pipelines/sku_custo.py). Repeti a decisao aqui.
+O anti-spam existe porque o sku_custo roda a cada 5 min -- sem janela de
+silencio seriam 12 e-mails por hora do mesmo erro.
 """
 
 import json
@@ -29,16 +23,14 @@ from config.settings import RAIZ
 
 log = logging.getLogger(__name__)
 
-# Estado em arquivo, e nao no banco, de proposito: a falha que mais importa
-# avisar e justamente "nao conectei no MySQL". Um anti-spam que precisa do
-# banco fica cego exatamente na hora em que ele e necessario.
+# Guardo em arquivo e nao no banco: a falha que mais importa avisar e "nao
+# conectei no MySQL", e ai um estado no banco ficaria cego.
 ARQUIVO_ESTADO = RAIZ / ".alertas_enviados.json"
 
 # 1 hora: no pior caso o sku_custo manda 1 e-mail/hora em vez de 12.
 JANELA_SILENCIO_S = 3600
 
-# Timeout curto. Um SMTP pendurado nao pode segurar o pipeline; se nao
-# respondeu em 20s, desisto e sigo -- o log e a etl_execucoes ja registraram.
+# SMTP pendurado nao pode segurar o pipeline. Se nao respondeu em 20s, sigo.
 TIMEOUT_SMTP_S = 20
 
 _LIMITE_CORPO = 8000
@@ -75,12 +67,10 @@ def _ler_estado() -> dict:
 
 
 def _salvar_estado(estado: dict) -> None:
-    """Grava atomico: temp + os.replace.
+    """Grava atomico: temp + os.replace, igual ao src/io/controle.py.
 
-    Mesmo motivo do salvar_estado de src/io/controle.py -- write direto trunca
-    antes de escrever, e a maquina caindo no meio deixaria um JSON pela metade.
-    Aqui o estrago seria menor (reenviar um e-mail), mas o padrao ja existe no
-    projeto e nao custa nada seguir.
+    Write direto trunca antes de escrever; a maquina caindo no meio deixaria
+    um JSON pela metade.
     """
     try:
         temporario = ARQUIVO_ESTADO.with_suffix(".json.tmp")
@@ -225,9 +215,8 @@ def _desde_quando(registro: dict) -> str:
 def base_ok(base: str, linhas: int | None = None) -> None:
     """Registra que `base` carregou. Nao manda e-mail, so anota o horario.
 
-    E daqui que sai o "desde quando" do alerta: sem esse carimbo o e-mail
-    conseguiria dizer que a base quebrou, mas nao ha quanto tempo ela esta
-    parada — que e o que decide se voce corre ou se espera a proxima rodada.
+    E daqui que sai o "desde quando" do alerta -- sem esse carimbo eu sei que
+    quebrou, mas nao ha quanto tempo.
     """
     try:
         estado = _ler_estado()
@@ -269,10 +258,8 @@ def base_ok(base: str, linhas: int | None = None) -> None:
 def base_falhou(base: str, erro: str, pipeline: str = "") -> bool:
     """Avisa que uma base especifica parou, dizendo desde quando.
 
-    Uma chamada por base: se tres tabelas quebram na mesma rodada, saem tres
-    e-mails com assunto distinto. Cada um respeita a janela de silencio por
-    conta propria, entao a base que voltar a funcionar para de avisar sem
-    silenciar as outras.
+    Uma chamada por base, cada uma com sua janela de silencio: a base que
+    voltar para de avisar sem silenciar as outras.
     """
     try:
         estado = _ler_estado()
@@ -310,11 +297,8 @@ def base_falhou(base: str, erro: str, pipeline: str = "") -> bool:
 def normalizou(pipeline: str, contexto: dict | None = None) -> bool:
     """Avisa que `pipeline` voltou ao normal, se havia falha pendente.
 
-    Fecha o ciclo: sem isso voce so descobre que normalizou porque parou de
-    receber e-mail, o que e indistinguivel do alertador ter quebrado.
-
-    Sai calado quando nao havia falha registrada -- que e o caso na esmagadora
-    maioria das rodadas.
+    Sem isso eu so descubro que normalizou porque parou de chegar e-mail -- o
+    que e indistinguivel do alertador ter quebrado. Calado se nao havia falha.
     """
     try:
         cfg = _config()

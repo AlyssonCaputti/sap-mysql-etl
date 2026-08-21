@@ -5,6 +5,7 @@
 """
 
 import logging
+import shutil
 import sys
 from pathlib import Path
 
@@ -14,10 +15,13 @@ from config.settings import (
     COLUNAS_POR_LOTE_ITENS,
     CSV_SAIDA,
     ENTRADA_VPS,
+    EXTENSOES_DADOS,
+    MANUAIS,
     ORIGENS,
     REFERENCIA_TECNICA_CLIENTES,
     SAIDAS,
 )
+from config.tables import PASTA_MANUAL_PARA_TABELA
 from src.io.log import configurar as configurar_log
 from src.io.readers import ler_arquivo, ler_excel
 from src.transform import clientes as t_clientes
@@ -94,10 +98,55 @@ def preparar_itens() -> None:
     )
 
 
+def preparar_manuais() -> None:
+    """Copia o que estiver nas pastas de atualizacao manual pro para_vps.
+
+    Nao transformo nada aqui: essas bases vao cruas pro banco. Só levo o
+    arquivo pra pasta certa, e o upload cuida do resto.
+
+    Copio em vez de mover porque a origem é a pasta de rede compartilhada — o
+    ETL antigo e outras pessoas ainda olham pra ela.
+    """
+    if not MANUAIS.is_dir():
+        log.warning("não achei a pasta de atualizacao manual: %s", MANUAIS)
+        return
+
+    copiados = 0
+    for pasta in sorted(p for p in MANUAIS.iterdir() if p.is_dir()):
+        tabela = PASTA_MANUAL_PARA_TABELA.get(pasta.name)
+        if not tabela:
+            # Pasta sem destino declarado fica de fora de propósito: subir
+            # tabela nova sem alguem decidir o nome é como se criam as
+            # duplicadas em PascalCase.
+            continue
+
+        arquivos = sorted(
+            a for a in pasta.iterdir() if a.suffix.lower() in EXTENSOES_DADOS
+        )
+        if not arquivos:
+            continue
+
+        destino_dir = ENTRADA_VPS / pasta.name
+        destino_dir.mkdir(parents=True, exist_ok=True)
+        for arquivo in arquivos:
+            destino = destino_dir / arquivo.name
+            # Sem cópia se o que está lá já é o mesmo arquivo: evita refazer
+            # carga de base que ninguém atualizou.
+            if destino.exists() and destino.stat().st_mtime >= arquivo.stat().st_mtime:
+                log.info("  (sem mudança) %s/%s", pasta.name, arquivo.name)
+                continue
+            shutil.copy2(arquivo, destino)
+            log.info("  %s/%s -> `%s`", pasta.name, arquivo.name, tabela)
+            copiados += 1
+
+    log.info("manuais: %s arquivo(s) na fila do upload", copiados)
+
+
 ETAPAS = {
     "clientes": preparar_clientes,
     "faturamento": preparar_faturamento,
     "itens": preparar_itens,
+    "manuais": preparar_manuais,
 }
 
 
