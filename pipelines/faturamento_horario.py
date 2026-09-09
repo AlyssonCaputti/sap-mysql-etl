@@ -28,6 +28,7 @@ Proteções: comparo o hash antes de trabalhar, espero o arquivo parar de cresce
 """
 
 import argparse
+import datetime
 import logging
 import time
 
@@ -46,6 +47,7 @@ from src.io.controle import (
 )
 from src.io.database import conexao
 from src.io.alerta import falhou, normalizou
+from src.io.execucoes import registrar
 from src.io.log import configurar as configurar_log
 from src.io.parquet import gravar_particionado, ler_meses, ultimos_meses
 from src.io.readers import ler_arquivo
@@ -69,12 +71,32 @@ ARQUIVO_LOCK = RAIZ / ".lock_faturamento"
 # Mês corrente + anterior. O anterior é seguro contra nota retroativa.
 MESES_JANELA = 2
 
+# Quantos meses o --tudo carrega por vez. Com os 32 de uma vez o processo
+# morria de out of memory numa máquina com pouca RAM livre (31/08/2026).
+MESES_POR_LOTE = 4
+
 # Um lugar só pro formato da emissão: é o mesmo que a carga usa no DELETE.
 FORMATO_EMISSAO = ESTRATEGIAS["faturamento"]["formato_data"]
 COLUNA_DATA = ESTRATEGIAS["faturamento"]["coluna_data"]
 
 # Uma carga completa leva ~1min. Lock mais velho que isso é de processo morto.
 LOCK_EXPIRA_EM = 30 * 60
+
+# Quanto tempo a origem pode ficar sem ser republicada antes de eu avisar.
+#
+# O SAP republica o CSV várias vezes por dia. Se ele congela, este pipeline sai
+# CALADO (hash igual = nada a fazer) e ninguém descobre: foi o que aconteceu em
+# 04/09/2026, com a origem parada desde 03/09 16:10 e o painel dizendo "TUDO OK"
+# porque o ETL, tecnicamente, não falhou.
+#
+# 5h em vez de 26h: a origem é HORÁRIA, então cinco horas paradas em dia útil já
+# é anomalia. Um limite de um dia só avisaria quando o dado do comercial já
+# estivesse velho demais para agir.
+HORAS_ORIGEM_PARADA = 5
+
+# Só cobro em horário comercial: o SAP não publica de madrugada, e avisar às 3h
+# da manhã treinaria o leitor a ignorar o alerta.
+HORA_COMERCIAL = range(8, 20)
 
 
 def preparar(linhas_anteriores: int | None = None) -> tuple[int, int, pd.Series]:
@@ -140,11 +162,46 @@ def preparar(linhas_anteriores: int | None = None) -> tuple[int, int, pd.Series]
 
 def carregar(tudo: bool = False, meses_origem: pd.Series | None = None) -> int:
     """Carrega a janela de meses no MySQL. Devolve as linhas enviadas."""
-    from pipelines.upload import carregar_arquivo
-
     meses = ultimos_meses(PARQUET, 999 if tudo else MESES_JANELA)
     if not meses:
         raise RuntimeError(f"nenhuma partição em {PARQUET}")
+
+    # O --tudo vai em lotes de meses; a janela normal cabe num lote só.
+    #
+    # Ler os 32 meses de uma vez estourava a memória da máquina (o CSV
+    # intermediário passa de 100 MB e o pandas precisa de vários GB pra
+    # parsear) e a carga inteira morria antes de tocar no banco. Em lote o
+    # pico fica no tamanho do maior lote, não do histórico.
+    #
+    # Fatiar é seguro porque o date_range apaga exatamente os meses do lote:
+    # cada lote reescreve os seus meses e não encosta nos outros.
+    if not tudo:
+        return _carregar_meses(meses, meses_origem)
+
+    total = 0
+    lotes = [
+        meses[i : i + MESES_POR_LOTE] for i in range(0, len(meses), MESES_POR_LOTE)
+    ]
+    log.info(
+        "  --tudo: %s mês(es) em %s lote(s) de até %s",
+        len(meses),
+        len(lotes),
+        MESES_POR_LOTE,
+    )
+    for indice, lote in enumerate(lotes, 1):
+        log.info("  lote %s/%s", indice, len(lotes))
+        # A conferência por mês só no último lote: ela compara a origem
+        # inteira com o banco, e no meio da carga a diferença seria só dos
+        # meses que ainda não subiram.
+        total += _carregar_meses(
+            lote, meses_origem if indice == len(lotes) else None
+        )
+    return total
+
+
+def _carregar_meses(meses: list[str], meses_origem: pd.Series | None) -> int:
+    """Carrega um conjunto de meses. É a carga que o date_range enxerga."""
+    from pipelines.upload import carregar_arquivo
 
     df = ler_meses(PARQUET, meses)
     log.info("  janela: %s (%s linhas)", ", ".join(meses), f"{len(df):,}")
@@ -195,6 +252,104 @@ def materializar() -> None:
 
     if full():
         raise RuntimeError("faturamento_full falhou — ver o log dele")
+
+
+def _conferir_origem_parada(
+    mtime_origem: float, modificado: str, agora: datetime.datetime | None = None
+) -> bool:
+    """Avisa se o SAP parou de republicar o CSV. Devolve True se avisou.
+
+    Este é o modo de falha que o pipeline NÃO cobria: quando a origem congela,
+    o hash não muda, não há exceção nenhuma e o pipeline sai calado — para
+    sempre. O painel mostra a última carga como bem-sucedida (porque foi) e o
+    dado do comercial vai envelhecendo sem ninguém saber.
+
+    Não é falha do ETL, é falha de quem publica — e por isso o texto do alerta
+    aponta para o SAP/origem, não para a carga. Diagnóstico errado faz o leitor
+    caçar problema no lugar errado.
+
+    A janela de silêncio do alerta.falhou() cuida da repetição: rodando de hora
+    em hora, isto vira 1 e-mail/hora no máximo, não 24 iguais.
+    """
+    agora = agora or datetime.datetime.now()
+    idade_h = (agora.timestamp() - mtime_origem) / 3600
+
+    if idade_h < HORAS_ORIGEM_PARADA:
+        return False
+    # weekday() >= 5 é sábado/domingo: a origem não é republicada no fim de
+    # semana, e cobrar isso todo sábado tornaria o alerta ruído.
+    if agora.weekday() >= 5 or agora.hour not in HORA_COMERCIAL:
+        return False
+
+    log.warning(
+        "origem parada há %.0fh (mod=%s) — nada a carregar, mas isso é anomalia",
+        idade_h,
+        modificado,
+    )
+    return falhou(
+        "faturamento_horario",
+        f"A origem do faturamento nao e republicada ha {idade_h:.0f}h.\n\n"
+        f"O ETL esta OK: sem arquivo novo, nao ha o que carregar. O problema "
+        f"esta em QUEM PUBLICA o CSV (SAP/integracao).\n\n"
+        f"Enquanto isso, `Faturamento` e `faturamento_full` seguem com o dado "
+        f"da ultima carga — cada vez mais velho.",
+        contexto={
+            "Origem": str(ORIGEM),
+            "Publicada em": modificado,
+            "Parada ha": f"{idade_h:.0f}h",
+            "Limite": f"{HORAS_ORIGEM_PARADA}h em dia util, 08-19h",
+        },
+        # Chave fixa: o texto carrega as horas, que mudam a cada rodada e
+        # furariam a janela de silencio toda hora.
+        chave="origem_parada",
+    )
+
+
+def _registrar_rodada(
+    inicio: datetime.datetime,
+    linhas: int,
+    falhas: int = 0,
+    erros: str = "",
+) -> None:
+    """Anota esta rodada em `etl_execucoes` — a tabela que o Vigia ETL lê.
+
+    Sem isto o faturamento é INVISÍVEL para o painel: até 04/09/2026 a tabela
+    tinha ~1 linha/dia (só o ETL diário das 10:10), e as 24 rodadas horárias do
+    faturamento — justo as que mexem na tabela que o comercial olha — não
+    apareciam em lugar nenhum. Quem quisesse saber "como rodou o faturamento das
+    15h" não tinha onde consultar.
+
+    Abro conexão própria de propósito: a de `_carregar_meses` já fechou quando
+    chego aqui, e o registro é observação — não vale a pena mantê-la aberta
+    durante o `materializar()`, que leva ~1min.
+
+    `bases` leva o par Faturamento/faturamento_full porque as duas são
+    atualizadas nesta rodada, e é isso que o resumo diário conta separadamente.
+
+    Segue a regra de ouro do src/io/execucoes.py: falhar aqui nunca derruba a
+    carga. Se a rodada já gravou no MySQL, perder o registro é aceitável.
+    """
+    try:
+        with conexao() as con:
+            cursor = con.cursor()
+            registrar(
+                cursor,
+                inicio=inicio,
+                falhas=falhas,
+                # 1 arquivo: a origem é sempre o dataRentNFVPS.csv.
+                arquivos=1,
+                linhas=linhas,
+                bases={"Faturamento": linhas, "faturamento_full": linhas},
+                erros=erros,
+            )
+            con.commit()
+            cursor.close()
+    except Exception as erro:
+        log.warning(
+            "  não registrei a rodada em etl_execucoes (%s): %s",
+            type(erro).__name__,
+            erro,
+        )
 
 
 def main(argumentos: list[str] | None = None) -> int:
@@ -250,11 +405,14 @@ def main(argumentos: list[str] | None = None) -> int:
         return 0
 
     if atual == estado.get("hash") and not (args.forcar or args.tudo):
-        # Calado de propósito: rodando toda hora, um "sem mudança" por hora
-        # enterraria o que importa no log.
+        # Calado de propósito no log: rodando toda hora, um "sem mudança" por
+        # hora enterraria o que importa. Mas ficar calado para SEMPRE é o furo
+        # que este bloco fecha — ver _conferir_origem_parada.
+        _conferir_origem_parada(ORIGEM.stat().st_mtime, modificado)
         return 0
 
     inicio = time.time()
+    inicio_dt = datetime.datetime.now()
     try:
         with Lock(ARQUIVO_LOCK, LOCK_EXPIRA_EM):
             log.info("=" * 60)
@@ -265,18 +423,27 @@ def main(argumentos: list[str] | None = None) -> int:
             materializar()
 
     except JaEstaRodando as erro:
+        # Não registro: não houve rodada, outro processo é que está com o lock.
         log.warning("pulei esta rodada — %s", erro)
         return 0
     except Exception as erro:
         # Não gravo o hash: na próxima hora tenta de novo.
         log.error("FALHA: %s: %s", type(erro).__name__, erro)
         log.debug("traceback", exc_info=True)
+        # Registro a falha ANTES do alerta: o e-mail pode estar desconfigurado
+        # (foi o que aconteceu de 31/08 a 04/09/2026), e nesse caso a tabela é o
+        # único lugar onde a falha fica registrada.
+        _registrar_rodada(
+            inicio_dt, linhas=0, falhas=1, erros=f"{type(erro).__name__}: {erro}"
+        )
         falhou(
             "faturamento_horario",
             f"{type(erro).__name__}: {erro}",
             contexto={"Origem mod": modificado},
         )
         return 1
+
+    _registrar_rodada(inicio_dt, linhas=linhas)
 
     salvar_estado(
         ARQUIVO_ESTADO,
