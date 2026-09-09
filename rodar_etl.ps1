@@ -39,7 +39,7 @@ function Etapa($nome, $modulo, $argumentos) {
 Log "========================================="
 Log "ETL diario iniciando..."
 
-Etapa "preparar" "pipelines.preparar" @("clientes", "itens")
+Etapa "preparar" "pipelines.preparar" @("clientes", "itens", "manuais")
 Etapa "upload"   "pipelines.upload"
 
 Log "ETL diario concluido com sucesso."

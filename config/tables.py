@@ -49,6 +49,8 @@ ESTRATEGIAS = {
     # truncate aqui: a sql_fator_uf tem `id` bigint auto_increment como chave,
     # e o replace dropa a tabela e recriaria tudo LONGTEXT sem a chave.
     "sql_fator_uf": {"estrategia": "truncate"},
+    "pricing-tabela-concorrente-precos": {"estrategia": "replace"},
+    "pricing-parcelamento-de-pedidos": {"estrategia": "replace"},
 }
 
 # Pasta sem entrada acima cai aqui — é de propósito, pasta nova funciona sem
@@ -102,6 +104,8 @@ PASTA_MANUAL_PARA_TABELA = {
     "preco_revenda": "calculo_preco_revenda",
     "sql_fator_uf": "sql_fator_uf",
     "vendedores": "Vendedores",
+    "pricing-parcelamento-de-pedidos": "faturamento_parcelamento",
+    "pricing-tabela-concorrente-precos": "preco_concorrentes",
 }
 
 
