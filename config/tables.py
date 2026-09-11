@@ -49,6 +49,8 @@ ESTRATEGIAS = {
     # truncate aqui: a sql_fator_uf tem `id` bigint auto_increment como chave,
     # e o replace dropa a tabela e recriaria tudo LONGTEXT sem a chave.
     "sql_fator_uf": {"estrategia": "truncate"},
+    "pricing-tabela-concorrente-precos": {"estrategia": "replace"},
+    "pricing-parcelamento-de-pedidos": {"estrategia": "replace"},
 }
 
 # Pasta sem entrada acima cai aqui — é de propósito, pasta nova funciona sem
@@ -102,6 +104,28 @@ PASTA_MANUAL_PARA_TABELA = {
     "preco_revenda": "calculo_preco_revenda",
     "sql_fator_uf": "sql_fator_uf",
     "vendedores": "Vendedores",
+    "pricing-parcelamento-de-pedidos": "faturamento_parcelamento",
+    "pricing-tabela-concorrente-precos": "preco_concorrentes",
+    # As V4 ja existem no banco em PascalCase, com dashboard lendo delas. Uso o
+    # nome exato que esta la: gerar v4_analytics criaria tabela nova e vazia ao
+    # lado da que e consumida. Conferi coluna a coluna antes de declarar --
+    # replace dropa e recria, entao schema divergente quebraria o consumidor.
+    #
+    # V4Roi, V4GoogleAds e V4MetaAds ficam de fora: os CSVs nao sao tabelas,
+    # sao relatorios com uma coluna por periodo. No V4Roi o cabecalho tem duas
+    # linhas (mes + semana) e cresce 4 colunas por mes. Nos dois de Ads as
+    # colunas se chamam 01_01_2025, 01_02_2025... -- nome que comeca com
+    # digito, que o validar_identificador recusa (o banco tem essas colunas
+    # porque foram criadas por fora, com crase).
+    #
+    # Os tres precisam despivotar (periodo/metrica/valor) antes de virar carga.
+    # Declarar sem isso so trocaria o schema da tabela a cada mes.
+    # Schema identico ao da tabela que ja existe (11 colunas, 5.058 linhas,
+    # sem chave): so faltava declarar.
+    "pedido-sugerido-grupo-economico": "PedidoSugeridoGrupoEconomico",
+    "V4Analytics": "V4Analytics",
+    "V4Geral": "V4Geral",
+    "V4Utm": "V4Utm",
 }
 
 

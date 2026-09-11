@@ -112,18 +112,26 @@ def preparar_manuais() -> None:
         return
 
     copiados = 0
+    sem_destino: list[str] = []
+    vazias: list[str] = []
     for pasta in sorted(p for p in MANUAIS.iterdir() if p.is_dir()):
         tabela = PASTA_MANUAL_PARA_TABELA.get(pasta.name)
         if not tabela:
             # Pasta sem destino declarado fica de fora de propósito: subir
             # tabela nova sem alguem decidir o nome é como se criam as
-            # duplicadas em PascalCase.
+            # duplicadas em PascalCase. Anoto pra decidir depois, em vez de
+            # ignorar calado -- pasta nova na rede some do log e ninguem ve.
+            sem_destino.append(pasta.name)
             continue
 
         arquivos = sorted(
             a for a in pasta.iterdir() if a.suffix.lower() in EXTENSOES_DADOS
         )
         if not arquivos:
+            # Declarada mas sem arquivo: nao sobe nada (subir vazio truncaria
+            # a tabela no banco). Registro porque isso e quase sempre origem
+            # que parou de publicar, e calado viraria dado velho eterno.
+            vazias.append(pasta.name)
             continue
 
         destino_dir = ENTRADA_VPS / pasta.name
@@ -139,6 +147,19 @@ def preparar_manuais() -> None:
             log.info("  %s/%s -> `%s`", pasta.name, arquivo.name, tabela)
             copiados += 1
 
+    if vazias:
+        log.warning(
+            "  %s pasta(s) declarada(s) SEM arquivo (nada subiu): %s",
+            len(vazias),
+            ", ".join(vazias),
+        )
+    if sem_destino:
+        log.info(
+            "  %s pasta(s) na rede sem tabela declarada em "
+            "PASTA_MANUAL_PARA_TABELA (ignoradas): %s",
+            len(sem_destino),
+            ", ".join(sem_destino),
+        )
     log.info("manuais: %s arquivo(s) na fila do upload", copiados)
 
 

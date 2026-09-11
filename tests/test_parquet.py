@@ -49,7 +49,10 @@ def test_janela_de_dois_meses(tmp_path, dados, meses):
     destino = tmp_path / "pq"
     gravar_particionado(dados, destino, meses)
 
-    janela = ultimos_meses(destino, 2)
+    # Ancoro a referencia: ultimos_meses() usa Timestamp.today() por padrao,
+    # entao sem isso o teste passa em agosto/2026 e quebra sozinho na virada
+    # do mes -- foi o que aconteceu em setembro.
+    janela = ultimos_meses(destino, 2, referencia=pd.Timestamp("2026-08-15"))
     assert janela == ["2026-07", "2026-08"]
 
     df = ler_meses(destino, janela)
