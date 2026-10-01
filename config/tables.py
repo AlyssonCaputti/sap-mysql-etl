@@ -123,9 +123,37 @@ PASTA_MANUAL_PARA_TABELA = {
     # Schema identico ao da tabela que ja existe (11 colunas, 5.058 linhas,
     # sem chave): so faltava declarar.
     "pedido-sugerido-grupo-economico": "PedidoSugeridoGrupoEconomico",
+    # modelos_pneus e a origem nova da PneusAro: mesmas 19 colunas do backup de
+    # 13/08 que gerou as 5.901 linhas de la, agora com 6.493. A pasta antiga
+    # `pneus_aro` esta vazia na rede -- quem publica passou a usar esta. Nao
+    # declaro pneus_aro tambem: duas pastas gravando na mesma tabela fariam a
+    # segunda sobrescrever a primeira conforme a ordem alfabetica.
+    "modelos_pneus": "PneusAro",
+    # Bases novas (16/09). Tabela com o nome da pasta, como pedido -- todas
+    # passam no validar_identificador e nenhuma colide com tabela existente,
+    # entao sao criadas do zero. As cinco de campanha dividem o mesmo layout
+    # de 33 colunas; uma tabela por trilha para nao misturar as listas.
+    # A pasta ficou vazia ate 18/09, quando o arquivo voltou com 15 colunas de
+    # UF a mais (es, mg, rj... imp) alem das 6 que a tabela ja tinha. Nenhuma
+    # coluna sumiu e o replace recria a tabela, entao nao precisa de ALTER.
+    "preco_pneu_por_revenda": "PrecoPneuPorRevenda",
+    "carteira_meta": "carteira_meta",
+    "delinte_d1": "delinte_d1",
+    "delinte_d2": "delinte_d2",
+    "denali_n1": "denali_n1",
+    "denali_n2": "denali_n2",
+    "denali_n3": "denali_n3",
+    # Promocao vigente por SKU (21/09). Tabela nova, nao colide com nada no
+    # banco. O arquivo chegou como Pasta1.csv, nome default do Excel -- se um
+    # segundo arquivo aparecer na pasta, os dois carregam na mesma tabela.
+    # descricao e quantidade_maxima vem 100% vazias hoje; declaro as 9 colunas
+    # como vieram pra que o dado entre sozinho se quem publica preencher.
+    "promocao_por_sku": "promocao_por_sku",
     "V4Analytics": "V4Analytics",
     "V4Geral": "V4Geral",
     "V4Utm": "V4Utm",
+    # Kits de pneus da Denali (24/09). Tabela nova, nome da pasta.
+    "kit_denali": "kit_denali",
 }
 
 
