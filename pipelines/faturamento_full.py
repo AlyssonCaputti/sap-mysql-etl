@@ -175,7 +175,7 @@ SELECT
     {_MES_ANO_SQL}                                                   AS mes_ano,
     CAST(NULLIF(TRIM(f.ano_mes_n_fe),'') AS UNSIGNED)                AS ano_mes_n_fe,
     f.tipo_doc, f.nota_item,
-    f.cod_cliente, f.nome_cliente, f.nota, f.uf, f.cidade, f.cep, f.vendedor,
+    f.cod_cliente, f.nome_cliente, f.nota, f.uf, f.cidade, f.cep, c.vendedor,
     f.cod_item, f.descricao_item,
     {_num("quantidade")}                                             AS quantidade,
     f.linha, f.marca, f.aro, f.ncm, f.utilizacao,
@@ -222,6 +222,7 @@ LEFT JOIN (
     SELECT
         codigo_do_pn,
         MAX(cnpj_cpf)                 AS cnpj_cpf,
+        MAX(vendedor)                 AS vendedor,
         MAX(ilha)                     AS ilha,
         MAX(supervisor)               AS supervisor,
         MAX(carteira)                 AS carteira,
