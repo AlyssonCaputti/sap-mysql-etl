@@ -70,6 +70,7 @@ MAPA_COLUNAS = {
     "AWSUB001": "awssub001",
     "AWSNAC01": "awsnac01",
     "IMP-001": "imp_001",
+    "U_GL_IdWake": "id_wake",
 }
 
 CHAVE = "ItemCode"

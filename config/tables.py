@@ -178,6 +178,13 @@ TIPOS = {
         "cnpj_cpf": "codigo",
         "estado": "texto_curto",
     },
+    # So o id_wake: o pandas le a coluna como float e o LONGTEXT gravava
+    # "340794.0". Tipando como inteiro ela vira BIGINT e grava 340794.
+    # As outras 35 continuam LONGTEXT de proposito -- tipar tudo de uma vez
+    # e risco sem motivo enquanto ninguem reclamou delas.
+    "itens": {
+        "id_wake": "inteiro",
+    },
     "sku_custo_cd_giba": {
         "sku": "codigo",
         "codigo_deposito": "texto_curto",
