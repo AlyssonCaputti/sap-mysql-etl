@@ -27,6 +27,7 @@ from src.io.readers import ler_arquivo, ler_excel
 from src.transform import clientes as t_clientes
 from src.transform import faturamento as t_faturamento
 from src.transform import itens as t_itens
+from src.transform import log_comex as t_log_comex
 
 log = logging.getLogger(__name__)
 
@@ -98,6 +99,33 @@ def preparar_itens() -> None:
     )
 
 
+PASTAS_COM_TRATAMENTO_PROPRIO = {"log_comex"}
+
+
+def preparar_log_comex() -> None:
+    """Junta os .xlsx mensais do LogComex (rede) numa tabela só.
+
+    Cada mês vem num arquivo próprio, sem coluna de período — só o nome do
+    arquivo diz o mês. Se eu deixasse o upload.py processar cada um
+    separadamente, a estratégia `replace` dropa e recria a cada arquivo, e só
+    sobraria o último mês. Por isso trato aqui: concateno tudo antes de gravar
+    um único CSV na saída.
+    """
+    log.info("log_comex...")
+    pasta = MANUAIS / "log_comex"
+    if not pasta.is_dir():
+        log.warning("  não achei a pasta do LogComex: %s", pasta)
+        return
+
+    arquivos = sorted(a for a in pasta.iterdir() if a.suffix.lower() in EXTENSOES_DADOS)
+    if not arquivos:
+        log.warning("  pasta do LogComex sem arquivo: %s", pasta)
+        return
+
+    resultado = t_log_comex.transformar(arquivos)
+    _escrever(resultado, ENTRADA_VPS / "log_comex" / "logcomex_ncm_tratado.csv")
+
+
 def preparar_manuais() -> None:
     """Copia o que estiver nas pastas de atualizacao manual pro para_vps.
 
@@ -115,6 +143,10 @@ def preparar_manuais() -> None:
     sem_destino: list[str] = []
     vazias: list[str] = []
     for pasta in sorted(p for p in MANUAIS.iterdir() if p.is_dir()):
+        if pasta.name in PASTAS_COM_TRATAMENTO_PROPRIO:
+            # log_comex tem etapa própria (preparar_log_comex): precisa juntar
+            # os .xlsx mensais antes de gravar, não copiar cru.
+            continue
         tabela = PASTA_MANUAL_PARA_TABELA.get(pasta.name)
         if not tabela:
             # Pasta sem destino declarado fica de fora de propósito: subir
@@ -167,6 +199,7 @@ ETAPAS = {
     "clientes": preparar_clientes,
     "faturamento": preparar_faturamento,
     "itens": preparar_itens,
+    "log_comex": preparar_log_comex,
     "manuais": preparar_manuais,
 }
 

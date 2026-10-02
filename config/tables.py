@@ -154,6 +154,9 @@ PASTA_MANUAL_PARA_TABELA = {
     "V4Utm": "V4Utm",
     # Kits de pneus da Denali (24/09). Tabela nova, nome da pasta.
     "kit_denali": "kit_denali",
+    # Inteligencia de importacao por NCM (LogComex, 02/10). O preparar.py junta
+    # os .xlsx mensais da pasta num CSV só antes de chegar aqui.
+    "log_comex": "log_comex",
 }
 
 
