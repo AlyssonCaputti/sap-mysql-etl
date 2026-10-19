@@ -288,6 +288,64 @@ def garantir_colunas(cursor) -> None:
             log.info("coluna '%s' adicionada a faturamento_full", nome)
 
 
+# Troca atômica (19/10/2026). Até aqui era TRUNCATE + INSERT na própria
+# tabela: o TRUNCATE vale na hora para todo mundo, e durante o INSERT (45-70 s,
+# toda hora) o hub lia a tabela VAZIA e guardava o zero no cache — a vendedora
+# abriu o Radar às 14:05 e viu faturamento R$ 0 por meia hora. Agora monto
+# numa tabela nova e troco com UM RENAME de duas pernas: quem lê vê a tabela
+# antiga cheia até o último instante e a nova logo depois, nunca vazia nem
+# ausente (o `replace` de src/load/strategies.py faz DROP e depois RENAME,
+# com um instante sem tabela — por isso não o reaproveito aqui).
+TABELA = "faturamento_full"
+TABELA_NOVA = "faturamento_full__nova"
+TABELA_VELHA = "faturamento_full__velha"
+
+# A nova abaixo desta fração da atual não entra: origem vazia ou carga
+# parcial viraria o mesmo "faturamento sumiu" que esta troca existe para
+# evitar. A atual fica, e o alerta sai como falha.
+FRACAO_MINIMA_LINHAS = 0.5
+
+_DESTINO_INSERT = "INSERT INTO faturamento_full ("
+
+
+def insert_em(tabela: str) -> str:
+    """O INSERT_SQL apontando para outra tabela — o SELECT não muda."""
+    if INSERT_SQL.count(_DESTINO_INSERT) != 1:
+        raise RuntimeError("INSERT_SQL mudou: destino do INSERT não encontrado")
+    return INSERT_SQL.replace(_DESTINO_INSERT, f"INSERT INTO `{tabela}` (", 1)
+
+
+def _contar(cursor, tabela: str) -> int:
+    cursor.execute(f"SELECT COUNT(*) FROM `{tabela}`")
+    return int(cursor.fetchone()[0])
+
+
+def materializar_com_troca(cursor) -> int:
+    """Monta a nova, confere o tamanho e troca. Devolve as linhas da nova.
+
+    Falha antes do RENAME deixa a tabela atual intacta (a sobra da nova é
+    apagada na próxima rodada, no DROP IF EXISTS do começo)."""
+    cursor.execute(f"DROP TABLE IF EXISTS `{TABELA_NOVA}`")
+    cursor.execute(f"DROP TABLE IF EXISTS `{TABELA_VELHA}`")
+    cursor.execute(f"CREATE TABLE `{TABELA_NOVA}` LIKE `{TABELA}`")
+    cursor.execute(insert_em(TABELA_NOVA))
+
+    novas = _contar(cursor, TABELA_NOVA)
+    atuais = _contar(cursor, TABELA)
+    if novas == 0 or novas < atuais * FRACAO_MINIMA_LINHAS:
+        cursor.execute(f"DROP TABLE IF EXISTS `{TABELA_NOVA}`")
+        raise RuntimeError(
+            f"carga nova com {novas:,} linhas contra {atuais:,} na atual — "
+            f"troca cancelada, a atual continua no ar"
+        )
+
+    cursor.execute(
+        f"RENAME TABLE `{TABELA}` TO `{TABELA_VELHA}`, `{TABELA_NOVA}` TO `{TABELA}`"
+    )
+    cursor.execute(f"DROP TABLE IF EXISTS `{TABELA_VELHA}`")
+    return novas
+
+
 def main() -> int:
     configurar_log("faturamento_full.log")
     log.info("=" * 60)
@@ -308,14 +366,11 @@ def main() -> int:
             garantir_colunas(cursor)
             avisar_chaves_duplicadas(cursor)
 
-            cursor.execute("TRUNCATE TABLE faturamento_full")
-            log.info("faturamento_full truncada")
-
             # sql_mode='' para STR_TO_DATE devolver NULL em data ruim, em vez
             # de abortar a query inteira.
             cursor.execute("SET SESSION sql_mode = ''")
-            cursor.execute(INSERT_SQL)
-            log.info("%s linhas inseridas", f"{cursor.rowcount:,}")
+            linhas = materializar_com_troca(cursor)
+            log.info("%s linhas inseridas — faturamento_full trocada", f"{linhas:,}")
 
             con.commit()
             cursor.close()
