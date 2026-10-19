@@ -242,3 +242,71 @@ def test_mes_ano_mapeia_todos_os_meses(aamm, esperado):
 def test_mes_ano_cobre_os_doze_meses():
     for mes in range(1, 13):
         assert f"WHEN '{mes:02d}'" in _MES_ANO_SQL
+
+
+# ─────────────────────────────────────────────────────────────
+# Troca atômica (19/10/2026): a tabela nunca fica vazia para quem lê
+# ─────────────────────────────────────────────────────────────
+from pipelines.faturamento_full import (  # noqa: E402
+    TABELA_NOVA,
+    TABELA_VELHA,
+    insert_em,
+    materializar_com_troca,
+)
+
+
+class _CursorFalso:
+    """Grava os comandos e responde o COUNT(*) de cada tabela."""
+
+    def __init__(self, contagens):
+        self.contagens = contagens
+        self.comandos = []
+        self._ultimo = None
+
+    def execute(self, sql):
+        self.comandos.append(" ".join(sql.split()))
+        self._ultimo = sql
+
+    def fetchone(self):
+        tabela = re.search(r"FROM `([^`]+)`", self._ultimo).group(1)
+        return (self.contagens[tabela],)
+
+
+def test_troca_monta_na_nova_e_troca_num_rename_so():
+    cur = _CursorFalso({TABELA_NOVA: 276_700, "faturamento_full": 276_600})
+    assert materializar_com_troca(cur) == 276_700
+    cmds = cur.comandos
+    assert not any("TRUNCATE" in c for c in cmds), "TRUNCATE esvazia a tabela que o hub lê"
+    i_create = next(i for i, c in enumerate(cmds) if c.startswith("CREATE TABLE"))
+    i_insert = next(i for i, c in enumerate(cmds) if c.startswith("INSERT INTO"))
+    i_rename = next(i for i, c in enumerate(cmds) if c.startswith("RENAME TABLE"))
+    assert i_create < i_insert < i_rename
+    assert f"INSERT INTO `{TABELA_NOVA}`" in cmds[i_insert]
+    # as duas pernas no MESMO comando: sem instante sem tabela
+    assert cmds[i_rename] == (
+        f"RENAME TABLE `faturamento_full` TO `{TABELA_VELHA}`, `{TABELA_NOVA}` TO `faturamento_full`"
+    )
+    assert cmds[-1] == f"DROP TABLE IF EXISTS `{TABELA_VELHA}`"
+    # nenhum DROP da tabela de produção
+    assert not any(c == "DROP TABLE IF EXISTS `faturamento_full`" for c in cmds)
+
+
+@pytest.mark.parametrize("novas,atuais", [(0, 276_600), (100_000, 276_600)])
+def test_carga_vazia_ou_parcial_nao_troca(novas, atuais):
+    cur = _CursorFalso({TABELA_NOVA: novas, "faturamento_full": atuais})
+    with pytest.raises(RuntimeError, match="troca cancelada"):
+        materializar_com_troca(cur)
+    assert not any(c.startswith("RENAME") for c in cur.comandos)
+    assert cur.comandos[-1] == f"DROP TABLE IF EXISTS `{TABELA_NOVA}`"
+
+
+def test_primeira_carga_com_tabela_atual_vazia_troca():
+    cur = _CursorFalso({TABELA_NOVA: 10, "faturamento_full": 0})
+    assert materializar_com_troca(cur) == 10
+
+
+def test_insert_em_so_muda_o_destino():
+    sql = insert_em(TABELA_NOVA)
+    assert sql.count(f"INSERT INTO `{TABELA_NOVA}` (") == 1
+    assert "INSERT INTO faturamento_full (" not in sql
+    assert sql.split("(", 1)[1] == INSERT_SQL.split("(", 1)[1]
