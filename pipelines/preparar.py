@@ -204,8 +204,13 @@ def preparar_manuais() -> None:
             sem_destino.append(pasta.name)
             continue
 
+        # "~$..." é a trava que o Excel cria enquanto alguém está com a
+        # planilha aberta na rede. Copiada, ela falha no upload todo dia
+        # (20/10/2026: ~$csat_garantia.xlsx) e o ETL inteiro sai com erro.
         arquivos = sorted(
-            a for a in pasta.iterdir() if a.suffix.lower() in EXTENSOES_DADOS
+            a
+            for a in pasta.iterdir()
+            if a.suffix.lower() in EXTENSOES_DADOS and not a.name.startswith("~$")
         )
         if not arquivos:
             # Declarada mas sem arquivo: nao sobe nada (subir vazio truncaria

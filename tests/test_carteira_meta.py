@@ -133,6 +133,18 @@ def test_planilha_ruim_nao_derruba_os_manuais(pastas, monkeypatch):
     assert not saida.exists()
 
 
+def test_manuais_nao_copia_trava_do_excel(pastas, monkeypatch):
+    origem, saida = pastas
+    outra = origem.parent / "csat_garantia"
+    outra.mkdir()
+    (outra / "~$csat_garantia.xlsx").write_text("lixo do Excel")
+    monkeypatch.setattr(preparar, "PASTA_MANUAL_PARA_TABELA", {"csat_garantia": "csat_garantia"})
+
+    preparar.preparar_manuais()
+
+    assert not (saida.parent.parent / "csat_garantia").exists()
+
+
 def test_manuais_nao_copia_a_carteira_meta_crua(pastas):
     origem, saida = pastas
     _gravar(origem / "relatorio.csv", _relatorio(), 1_000_000)

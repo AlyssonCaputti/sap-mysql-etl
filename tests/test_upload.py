@@ -111,6 +111,19 @@ def test_arquivo_ilegivel_permanece_na_entrada(ambiente, monkeypatch):
     assert not list(backup.rglob("*.xlsx")), "nao pode ter ido para o backup"
 
 
+def test_trava_do_excel_e_ignorada_e_nao_conta_como_falha(ambiente, monkeypatch):
+    """CICATRIZ 20/10/2026: ~$csat_garantia.xlsx (alguem com a planilha aberta
+    na rede) foi copiado para a entrada, falhou com 'File is not a zip file' e,
+    como so sai da entrada quando sobe, faria o ETL sair com erro todo dia."""
+    entrada, backup, _ = ambiente
+    trava = _criar_csv(entrada / "itens", "~$planilha.xlsx", "lixo do excel")
+
+    monkeypatch.setattr(upload, "ESTRATEGIAS", {"itens": {"estrategia": "replace"}})
+
+    assert upload.varrer() == 0
+    assert trava.exists()
+
+
 def test_arquivo_vazio_nao_vai_para_backup(ambiente, monkeypatch):
     entrada, backup, conexao = ambiente
     arquivo = _criar_csv(entrada / "itens", "vazio.csv", "sku;valor\n")
