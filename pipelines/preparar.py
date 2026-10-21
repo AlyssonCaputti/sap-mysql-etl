@@ -24,6 +24,8 @@ from config.settings import (
 from config.tables import PASTA_MANUAL_PARA_TABELA
 from src.io.log import configurar as configurar_log
 from src.io.readers import ler_arquivo, ler_excel
+from src.io.alerta import base_falhou
+from src.transform import carteira_meta as t_carteira_meta
 from src.transform import clientes as t_clientes
 from src.transform import faturamento as t_faturamento
 from src.transform import itens as t_itens
@@ -99,7 +101,43 @@ def preparar_itens() -> None:
     )
 
 
-PASTAS_COM_TRATAMENTO_PROPRIO = {"log_comex"}
+PASTAS_COM_TRATAMENTO_PROPRIO = {"log_comex", "carteira_meta"}
+
+
+def preparar_carteira_meta() -> None:
+    """Limpa a planilha de carteiras antes do upload (ver src/transform/carteira_meta.py).
+
+    É a fonte do acesso por carteira no hub, então nunca sobe crua. Se a pasta
+    tiver mais de um arquivo, vale o mais recente — é o que quem atualiza
+    espera quando salva a versão nova sem apagar a velha; o upload de cada um
+    em sequência (replace) deixaria valendo o último em ordem ALFABÉTICA.
+    """
+    log.info("carteira_meta...")
+    pasta = MANUAIS / "carteira_meta"
+    if not pasta.is_dir():
+        log.warning("  não achei a pasta da carteira_meta: %s", pasta)
+        return
+    arquivos = [
+        a
+        for a in pasta.iterdir()
+        if a.suffix.lower() in EXTENSOES_DADOS and not a.name.startswith("~$")
+    ]
+    if not arquivos:
+        log.warning("  pasta da carteira_meta sem arquivo: %s", pasta)
+        return
+    arquivo = max(arquivos, key=lambda a: a.stat().st_mtime)
+    if len(arquivos) > 1:
+        log.warning(
+            "  %s arquivos na pasta da carteira_meta; usei o mais recente: %s",
+            len(arquivos),
+            arquivo.name,
+        )
+    df, avisos = ler_arquivo(arquivo)
+    _avisar(avisos)
+    _escrever(
+        t_carteira_meta.transformar(df),
+        ENTRADA_VPS / "carteira_meta" / "carteira_meta_tratada.csv",
+    )
 
 
 def preparar_log_comex() -> None:
@@ -139,6 +177,16 @@ def preparar_manuais() -> None:
         log.warning("não achei a pasta de atualizacao manual: %s", MANUAIS)
         return
 
+    # Dentro da etapa manuais porque é ela que o rodar_etl.ps1 chama. A falha
+    # fica só nesta base: a etapa que levanta aborta o ETL do dia inteiro, e
+    # uma planilha de carteiras mal preenchida não pode segurar clientes e
+    # itens. Sem arquivo novo, a tabela fica como estava (acesso de ontem).
+    try:
+        preparar_carteira_meta()
+    except Exception as erro:
+        log.error("  FALHA na carteira_meta (tabela fica como estava): %s", erro)
+        base_falhou("carteira_meta", str(erro), pipeline="preparar")
+
     copiados = 0
     sem_destino: list[str] = []
     vazias: list[str] = []
@@ -156,8 +204,13 @@ def preparar_manuais() -> None:
             sem_destino.append(pasta.name)
             continue
 
+        # "~$..." é a trava que o Excel cria enquanto alguém está com a
+        # planilha aberta na rede. Copiada, ela falha no upload todo dia
+        # (20/10/2026: ~$csat_garantia.xlsx) e o ETL inteiro sai com erro.
         arquivos = sorted(
-            a for a in pasta.iterdir() if a.suffix.lower() in EXTENSOES_DADOS
+            a
+            for a in pasta.iterdir()
+            if a.suffix.lower() in EXTENSOES_DADOS and not a.name.startswith("~$")
         )
         if not arquivos:
             # Declarada mas sem arquivo: nao sobe nada (subir vazio truncaria
@@ -200,6 +253,7 @@ ETAPAS = {
     "faturamento": preparar_faturamento,
     "itens": preparar_itens,
     "log_comex": preparar_log_comex,
+    "carteira_meta": preparar_carteira_meta,
     "manuais": preparar_manuais,
 }
 

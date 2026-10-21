@@ -220,8 +220,12 @@ def varrer(pular: set[str] | None = None) -> int:
                 log.info("  (outro pipeline) %s/", pasta.name)
                 continue
 
+            # Trava do Excel ("~$...") não é dado; ver preparar_manuais. Ela
+            # nunca sobe, então nunca sai da entrada e falharia todo dia.
             arquivos = sorted(
-                a for a in pasta.iterdir() if a.suffix.lower() in EXTENSOES
+                a
+                for a in pasta.iterdir()
+                if a.suffix.lower() in EXTENSOES and not a.name.startswith("~$")
             )
             if not arquivos:
                 log.info("  (vazia) %s/", pasta.name)
