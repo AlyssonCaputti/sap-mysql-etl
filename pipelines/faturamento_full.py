@@ -163,7 +163,7 @@ INSERT INTO faturamento_full (
     icms, st, ipi, pis, cofins, fcp, icmsdest, cred_presumido, red_base_pis_cofins,
     taxaicms, taxast, taxaipi, taxapis, taxacofins, taxafcp, taxaicmsdest,
     cnpj, ilha, supervisor, carteira, vendedoratendente,
-    nicho, limite_credito, saldo_em_conta, cod_grupo, nome_grupo
+    nicho, limite_credito, saldo_em_conta, cod_grupo, nome_grupo, vendedor_nota
 )
 SELECT
     f.filial, f.pedido, f.nota_sap,
@@ -216,7 +216,8 @@ SELECT
     {_num("limite_de_credito", "c")}                                 AS limite_credito,
     {_num("saldo_em_conta", "c")}                                    AS saldo_em_conta,
     c.cod_grupo_economico                                            AS cod_grupo,
-    c.nome_do_grupo_economico                                        AS nome_grupo
+    c.nome_do_grupo_economico                                        AS nome_grupo,
+    f.vendedor                                                       AS vendedor_nota
 FROM Faturamento f
 LEFT JOIN (
     SELECT
@@ -244,12 +245,18 @@ LEFT JOIN (
 ) d ON d.cod_cliente = f.cod_cliente
 """
 
-# Colunas de Clientes que a migration original não criou. Adiciono aqui se
-# faltarem (roda quantas vezes precisar). `ilha` já existe no schema base.
+# Colunas que a migration original não criou. Adiciono aqui se faltarem (roda
+# quantas vezes precisar). `ilha` já existe no schema base.
+#
+# `vendedor_nota` (30/10/2026): o `vendedor` desta tabela é a carteira ATUAL do
+# cliente (vem de Clientes), então a nota antiga muda de carteira quando o
+# cliente muda. A carteira de quem vendeu fica na própria nota, e é ela que o
+# BI (Zoho) usa — o Placar do hub passa a ler esta coluna. Vai no fim da tabela.
 _COLUNAS_CLIENTE = (
     ("supervisor", "VARCHAR(128)", "ilha"),
     ("carteira", "VARCHAR(64)", "supervisor"),
     ("vendedoratendente", "VARCHAR(128)", "carteira"),
+    ("vendedor_nota", "VARCHAR(128)", "nome_grupo"),
 )
 
 # O GROUP BY nas subqueries já impede que chave repetida multiplique linha do
