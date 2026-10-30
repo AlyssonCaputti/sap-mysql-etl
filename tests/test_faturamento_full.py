@@ -310,3 +310,47 @@ def test_insert_em_so_muda_o_destino():
     assert sql.count(f"INSERT INTO `{TABELA_NOVA}` (") == 1
     assert "INSERT INTO faturamento_full (" not in sql
     assert sql.split("(", 1)[1] == INSERT_SQL.split("(", 1)[1]
+
+
+# ─────────────────────────────────────────────────────────────
+# vendedor_nota (30/10/2026): a carteira de quem VENDEU, da própria nota
+# ─────────────────────────────────────────────────────────────
+from pipelines.faturamento_full import garantir_colunas  # noqa: E402
+
+
+def test_vendedor_nota_vem_da_nota_e_vendedor_do_cadastro():
+    """As duas colunas leem fontes diferentes de propósito: trocar uma pela
+    outra devolve ao Placar a carteira atual do cliente em vez da do pedido."""
+    assert "f.vendedor                                                       AS vendedor_nota" in INSERT_SQL
+    assert "f.cep, c.vendedor," in INSERT_SQL
+
+
+def test_vendedor_nota_e_a_ultima_coluna_do_insert():
+    colunas = re.search(r"INSERT INTO faturamento_full \((.*?)\)\s*SELECT", INSERT_SQL, re.S).group(1)
+    assert [c.strip() for c in colunas.split(",")][-1] == "vendedor_nota"
+
+
+class _CursorColunas:
+    def __init__(self, existentes):
+        self.existentes = existentes
+        self.comandos = []
+
+    def execute(self, sql):
+        self.comandos.append(sql)
+
+    def fetchall(self):
+        return [(c,) for c in self.existentes]
+
+
+def test_garantir_colunas_cria_vendedor_nota_no_fim_da_tabela():
+    cur = _CursorColunas(["ilha", "supervisor", "carteira", "vendedoratendente", "nome_grupo"])
+    garantir_colunas(cur)
+    assert cur.comandos[-1] == (
+        "ALTER TABLE faturamento_full ADD COLUMN `vendedor_nota` VARCHAR(128) NULL AFTER `nome_grupo`"
+    )
+
+
+def test_garantir_colunas_nao_recria_vendedor_nota():
+    cur = _CursorColunas(["supervisor", "carteira", "vendedoratendente", "vendedor_nota"])
+    garantir_colunas(cur)
+    assert not any("ALTER" in c for c in cur.comandos)
