@@ -27,6 +27,7 @@ from src.io.readers import ler_arquivo, ler_excel
 from src.io.alerta import base_falhou
 from src.transform import carteira_meta as t_carteira_meta
 from src.transform import clientes as t_clientes
+from src.transform import esov_tracker as t_esov
 from src.transform import faturamento as t_faturamento
 from src.transform import itens as t_itens
 from src.transform import log_comex as t_log_comex
@@ -101,7 +102,37 @@ def preparar_itens() -> None:
     )
 
 
-PASTAS_COM_TRATAMENTO_PROPRIO = {"log_comex", "carteira_meta"}
+PASTAS_COM_TRATAMENTO_PROPRIO = {"log_comex", "carteira_meta", "esov_tracker"}
+
+PASTA_ESOV = "esov_tracker"
+
+
+def preparar_esov_tracker() -> None:
+    """Sobe os blocos de entrada da planilha do ESOV (ver src/transform/esov_tracker.py).
+
+    A planilha não é tabela (blocos por aba, totais e shares por fórmula), então
+    nunca vai crua. Vale a mais recente da pasta: o Marketing salva a versão
+    nova (v03, v04...) sem apagar a velha, e o replace com duas deixaria a
+    última em ordem alfabética.
+    """
+    log.info("esov_tracker...")
+    pasta = MANUAIS / PASTA_ESOV
+    if not pasta.is_dir():
+        log.warning("  não achei a pasta do ESOV: %s", pasta)
+        return
+    arquivos = [
+        a
+        for a in pasta.iterdir()
+        if a.is_file() and a.suffix.lower() in (".xlsx", ".xlsm") and not a.name.startswith("~$")
+    ]
+    if not arquivos:
+        log.warning("  pasta do ESOV sem planilha: %s", pasta)
+        return
+    arquivo = max(arquivos, key=lambda a: a.stat().st_mtime)
+    if len(arquivos) > 1:
+        log.warning("  %s planilhas na pasta do ESOV; usei a mais recente: %s", len(arquivos), arquivo.name)
+
+    _escrever(t_esov.transformar(arquivo), ENTRADA_VPS / PASTA_ESOV / "esov_tracker_tratado.csv")
 
 
 def preparar_carteira_meta() -> None:
@@ -186,6 +217,13 @@ def preparar_manuais() -> None:
     except Exception as erro:
         log.error("  FALHA na carteira_meta (tabela fica como estava): %s", erro)
         base_falhou("carteira_meta", str(erro), pipeline="preparar")
+    try:
+        preparar_esov_tracker()
+    except Exception as erro:
+        # Planilha editada à mão com bloco fora do lugar: a tabela fica com a
+        # carga anterior e o alerta diz aba e célula (a mensagem do transform).
+        log.error("  FALHA no esov_tracker (tabela fica como estava): %s", erro)
+        base_falhou("esov_tracker", str(erro), pipeline="preparar")
 
     copiados = 0
     sem_destino: list[str] = []
@@ -254,6 +292,7 @@ ETAPAS = {
     "itens": preparar_itens,
     "log_comex": preparar_log_comex,
     "carteira_meta": preparar_carteira_meta,
+    "esov_tracker": preparar_esov_tracker,
     "manuais": preparar_manuais,
 }
 

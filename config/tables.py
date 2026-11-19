@@ -80,6 +80,11 @@ CONTRATOS = {
         },
         "opcionais": set(),
     },
+    # O hub lê as quatro colunas; sem qualquer uma o cálculo do ESOV não fecha.
+    "esov_tracker": {
+        "obrigatorias": {"mes", "marca", "componente", "valor"},
+        "opcionais": set(),
+    },
 }
 
 
@@ -157,6 +162,10 @@ PASTA_MANUAL_PARA_TABELA = {
     # Inteligencia de importacao por NCM (LogComex, 02/10). O preparar.py junta
     # os .xlsx mensais da pasta num CSV só antes de chegar aqui.
     "log_comex": "log_comex",
+    # ESOV Tracker do Marketing (19/11/2026). Tabela nova, nome da pasta. O
+    # preparar.py extrai só os blocos de entrada das abas Search, Anúncios
+    # (Meta e Google) e YouTube em formato longo; o hub calcula SoV/SoM/ESOV.
+    "esov_tracker": "esov_tracker",
 }
 
 
@@ -170,6 +179,14 @@ PASTA_MANUAL_PARA_TABELA = {
 # Todo indice exige tipo declarado na coluna: LONGTEXT nao indexa sem prefixo,
 # e o criar_tabela levanta se eu esquecer.
 TIPOS = {
+    # Tabela nova, tipada desde o início: o hub agrega `valor` e filtra por
+    # mês/componente, e LONGTEXT obrigaria CAST em toda consulta.
+    "esov_tracker": {
+        "mes": "texto_curto",
+        "marca": "texto_curto",
+        "componente": "texto_curto",
+        "valor": "decimal",
+    },
     "faturamento": {
         "emissao": "datahora",
         "cod_cliente": "codigo",
